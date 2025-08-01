@@ -1,0 +1,19 @@
+[project]
+name = "armpi_common"
+version = "0.1.0"
+description = "armpi 通信 sdk"
+authors = [
+    {name = "任伟明", email = "corejk@163.com"},
+]
+dependencies = ["pyserial-asyncio>=0.6"]
+requires-python = ">=3.8"
+readme = "README.md"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+
+[tool.pdm]
+distribution = true
