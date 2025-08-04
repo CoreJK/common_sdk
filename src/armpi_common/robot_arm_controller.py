@@ -59,7 +59,7 @@ class RobotArmController:
                     recv_data = self.serial_client.read()
                     if recv_data:
                         for data in recv_data:
-                            print(f"recv_data: %0.2x" % data)
+                            # print(f"recv_data: %0.2x" % data)
                             if self.state == PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1:
                                 if data == 0x55:
                                     self.frame.append(data)
@@ -111,8 +111,13 @@ class RobotArmController:
                             elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_CHECKSUM:
                                 # todo 计算校验和， 如果校验和正确，则将数据包发送给队列
                                 crc_checksum = calculate_checksum(self.frame)
+                                print(f"计算校验和: %0.2x" % crc_checksum)
+                                print(f"接收到的校验和: %0.2x" % data)
                                 if crc_checksum == data:
                                     self.packet_report_serial_servo(self.frame)
+                                    print(f"数据包发送给队列: {self.frame}")
+                                    self.frame = []
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
                                 else:
                                     self.frame = []
                                     self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
@@ -130,17 +135,17 @@ class RobotArmController:
                 self.bus_write(bytes(cmd))
                 
                 try:
-                    data = self.servo_recv_queue.get(block=True, timeout=0.1)
+                    recv_data = self.servo_recv_queue.get(block=True, timeout=0.1)
                     break
                 except queue.Empty:
                     count += 1
                     if count > self.retry_times:
-                        data = None
+                        recv_data = None
                         raise Exception('读取舵机数据失败')
                     break
             
-            if data is not None:
-                print("返回的数据 %s " % str(data))
+            if recv_data is not None:
+                print(f"解包数据: {recv_data}")
             else:
                 print("返回的数据为空")
                 return None
