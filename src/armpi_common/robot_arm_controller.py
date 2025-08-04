@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*- 
 # robot_arm_controller.py - 机械臂控制器
 
+import enum
+from itertools import count
+import queue
 import threading
 from queue import Queue
 import struct
@@ -11,6 +14,15 @@ import serial
 from armpi_common.cmdTable import CMD_TABLE
 from armpi_common.utils import calculate_checksum, get_command_info_by_id, split_to_bytes
 
+class PacketControllerState(enum.IntEnum):
+    PACKET_CONTROLLER_STATE_STARTBYTE1 = 0
+    PACKET_CONTROLLER_STATE_STARTBYTE2 = 1
+    PACKET_CONTROLLER_STATE_ID = 2
+    PACKET_CONTROLLER_STATE_LENGTH = 3
+    PACKET_CONTROLLER_STATE_CMD = 4
+    PACKET_CONTROLLER_STATE_DATA = 5
+    PACKET_CONTROLLER_STATE_CHECKSUM = 6
+
 class RobotArmController:
     def __init__(self, device='/dev/ttyUSB0', baudrate=115200, timeout=0):
         self.port = device
@@ -18,7 +30,121 @@ class RobotArmController:
         self.serial_client = serial.Serial(device, baudrate, timeout=timeout)
         self.serial_client.rts = False
         self.serial_client.dtr = False
+        self.enable_recv = False
+
+        # 数据接收相关        
+        self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
+        self.frame = []
+        self.recv_count = 0
+        self.retry_times = 10
+        self.servo_recv_queue = Queue(maxsize=1)
+        self.servo_read_lock = threading.Lock()
+        threading.Thread(target=self.recv_task, daemon=True).start()
+        time.sleep(0.1)
         
+        
+    def enable_reception(self, enable=True):
+        self.enable_recv = enable
+    
+    def packet_report_serial_servo(self, data):
+        try:
+            self.servo_recv_queue.put_nowait(data)
+        except:
+            pass
+    
+    def recv_task(self):
+        try:
+            while True:
+                if self.enable_recv:
+                    recv_data = self.serial_client.read()
+                    if recv_data:
+                        for data in recv_data:
+                            print(f"recv_data: %0.2x" % data)
+                            if self.state == PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1:
+                                if data == 0x55:
+                                    self.frame.append(data)
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE2
+                                else:
+                                    self.frame = []
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
+                                    
+                            elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE2:
+                                if data == 0x55:
+                                    self.frame.append(data)
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_ID
+                                else:
+                                    self.frame = []
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
+                                    
+                            elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_ID:
+                                if data:
+                                    self.frame.append(data)
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_LENGTH
+                                else:
+                                    self.frame = []
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
+                                
+                            elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_LENGTH:
+                                if data:
+                                    self.frame.append(data)
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_CMD
+                                else:
+                                    self.frame = []
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
+                                
+                            elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_CMD:
+                                if data:
+                                    self.frame.append(data)
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_DATA
+                                else:
+                                    self.frame = []
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
+                                
+                            elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_DATA:
+                                if data:
+                                    self.frame.append(data)
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_CHECKSUM
+                                else:
+                                    self.frame = []
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
+                                
+                            elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_CHECKSUM:
+                                # todo 计算校验和， 如果校验和正确，则将数据包发送给队列
+                                crc_checksum = calculate_checksum(self.frame)
+                                if crc_checksum == data:
+                                    self.packet_report_serial_servo(self.frame)
+                                else:
+                                    self.frame = []
+                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
+                                
+        except Exception as e:
+            print(f"发生异常: {e}")
+        finally:
+            self.serial_client.close()
+    
+    def servo_read_and_unpack(self, cmd, unpack_format):
+        """读取舵机数据并解包"""
+        with self.servo_read_lock:
+            count = 0
+            while True:
+                self.bus_write(bytes(cmd))
+                
+                try:
+                    data = self.servo_recv_queue.get(block=True, timeout=0.1)
+                    break
+                except queue.Empty:
+                    count += 1
+                    if count > self.retry_times:
+                        data = None
+                        raise Exception('读取舵机数据失败')
+                    break
+            
+            if data is not None:
+                print("返回的数据 %s " % str(data))
+            else:
+                print("返回的数据为空")
+                return None
+    
     def bus_write(self, cmd_data):
         """只负责发送已经构造好的数据"""
         # todo 改成线程发送
@@ -232,13 +358,25 @@ class RobotArmController:
         cmd_data.append(calculate_checksum(cmd_data))
         self.bus_write(bytes(cmd_data))
     
+    def get_joint_angle(self, joint_id):
+        """获取指定关节的角度"""
+        cmd_data = CMD_TABLE['SERVO_MOVE_TIME_READ']
+        cmd_data[2] = joint_id
+        cmd_data.append(calculate_checksum(cmd_data))
+        recv_data = self.servo_read_and_unpack(cmd_data, '<h')
+        return recv_data
+    
 if __name__ == '__main__':
     controller = RobotArmController()
-    # controller.set_joint_angle_use_time(1, 300, 1000)
+    controller.enable_reception(True)
+    controller.set_joint_angle_use_time(1, 500, 1000)
+    controller.get_joint_angle(1)
     # controller.set_joint_angle_with_time_after_start(1, 100, 10000)
     # controller.set_joint_move_start(1)
     # time.sleep(2)
     # controller.set_joint_emergency_stop(1)
     # controller.set_joint_load_or_unload(1, 1)
     # controller.set_joint_temp_limit_range(1, 85)
-    controller.set_joint_led(3, 0)
+    # controller.set_joint_led(3, 0)
+    
+    
