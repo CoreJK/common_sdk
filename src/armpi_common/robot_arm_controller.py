@@ -36,6 +36,7 @@ class RobotArmController:
         self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
         self.frame = []
         self.recv_count = 0
+        self.data_length = 0
         self.retry_times = 10
         self.servo_recv_queue = Queue(maxsize=1)
         self.servo_read_lock = threading.Lock()
@@ -59,7 +60,7 @@ class RobotArmController:
                     recv_data = self.serial_client.read()
                     if recv_data:
                         for data in recv_data:
-                            # print(f"recv_data: %0.2x" % data)
+                            print(f"recv_data: %0.2x" % data)
                             if self.state == PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1:
                                 if data == 0x55:
                                     self.frame.append(data)
@@ -87,6 +88,7 @@ class RobotArmController:
                             elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_LENGTH:
                                 if data:
                                     self.frame.append(data)
+                                    self.data_length = self.frame[3] - 3
                                     self.state = PacketControllerState.PACKET_CONTROLLER_STATE_CMD
                                 else:
                                     self.frame = []
@@ -102,8 +104,11 @@ class RobotArmController:
                                 
                             elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_DATA:
                                 if data:
+                                    # todo 根据数据包的长度 - 1, 判断返回参数的长度
                                     self.frame.append(data)
-                                    self.state = PacketControllerState.PACKET_CONTROLLER_STATE_CHECKSUM
+                                    self.recv_count += 1
+                                    if self.recv_count >= self.data_length:
+                                        self.state = PacketControllerState.PACKET_CONTROLLER_STATE_CHECKSUM
                                 else:
                                     self.frame = []
                                     self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
@@ -113,9 +118,9 @@ class RobotArmController:
                                 crc_checksum = calculate_checksum(self.frame)
                                 print(f"计算校验和: %0.2x" % crc_checksum)
                                 print(f"接收到的校验和: %0.2x" % data)
-                                if crc_checksum == data:
+                                if data:
                                     self.packet_report_serial_servo(self.frame)
-                                    print(f"数据包发送给队列: {self.frame}")
+                                    print(f"数据包发送给队列: {list(map(lambda x: hex(x), self.frame))}")
                                     self.frame = []
                                     self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
                                 else:
@@ -369,12 +374,16 @@ class RobotArmController:
         cmd_data[2] = joint_id
         cmd_data.append(calculate_checksum(cmd_data))
         recv_data = self.servo_read_and_unpack(cmd_data, '<h')
+        # todo 将数据转换成可读的十进制，取出角度和时间
+        # angle = recv_data[]
+        # time = recv_data[1]
+        # print(f"关节{joint_id}的角度: {angle}, 时间: {time}")
         return recv_data
     
 if __name__ == '__main__':
     controller = RobotArmController()
     controller.enable_reception(True)
-    controller.set_joint_angle_use_time(1, 500, 1000)
+    # controller.set_joint_angle_use_time(1, 500, 1000)
     controller.get_joint_angle(1)
     # controller.set_joint_angle_with_time_after_start(1, 100, 10000)
     # controller.set_joint_move_start(1)
