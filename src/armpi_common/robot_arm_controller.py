@@ -63,7 +63,7 @@ class RobotArmController:
                     recv_data = self.serial_client.read()
                     if recv_data:
                         for data in recv_data:
-                            # print(f"recv_data: %0.2x" % data)
+                            logger.debug(f"接收到的数据: %0.2x" % data)
                             if self.state == PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1:
                                 if data == 0x55:
                                     self.frame.append(data)
@@ -91,8 +91,8 @@ class RobotArmController:
                             elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_LENGTH:
                                 if data:
                                     self.frame.append(data)
-                                    # 数据长度字段表示整个数据包的长度，包括ID、长度、指令、数据和校验和
                                     self.data_length = data - 3  # 减去ID、长度、指令字段的长度
+                                    logger.debug(f"期望数据长度: {data}")
                                     self.recv_count = 0  # 重置接收计数器
                                     self.state = PacketControllerState.PACKET_CONTROLLER_STATE_CMD
                                 else:
@@ -121,8 +121,8 @@ class RobotArmController:
                             elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_CHECKSUM:
                                 # todo 计算校验和， 如果校验和正确，则将数据包发送给队列
                                 crc_checksum = calculate_checksum(self.frame)
-                                # print(f"计算校验和: %0.2x" % crc_checksum)
-                                # print(f"接收到的校验和: %0.2x" % data)
+                                logger.debug(f"计算校验和: %0.2x" % crc_checksum)
+                                logger.debug(f"接收到的校验和: %0.2x" % data)
                                 if data:
                                     self.packet_report_serial_servo(self.frame)
                                     logger.debug(f"接收到数据包, 验证完整, 发送给队列: {list(map(lambda x: hex(x), self.frame))}")
@@ -141,7 +141,7 @@ class RobotArmController:
         if self.enable_recv:
             with self.servo_read_lock:
                 logger.info("开始读取舵机数据")
-                logger.debug(f"发送的数据: {cmd}")
+                logger.debug(f"发送的读取指令: {list(map(lambda x: hex(x), cmd))}")
                 count = 0
                 while True:
                     self.bus_write(bytes(cmd))
@@ -152,14 +152,14 @@ class RobotArmController:
                     except queue.Empty:
                         logger.warning(f"读取舵机数据失败，重试 {count} 次")
                         count += 1
-                        logger.debug(f"重新发送命令: {cmd}")
-                        self.bus_write(bytes(cmd))
+                        # logger.debug(f"重新发送命令: {cmd}")
+                        # self.bus_write(bytes(cmd))
                         if count > self.retry_times:
                             recv_data = None
                             break                        
                 
                 if recv_data is not None:
-                    logger.debug(f"解包数据: {recv_data}")
+                    logger.debug(f"解包数据: {list(map(lambda x: hex(x), recv_data))}")
                     return {
                         'status': True,
                         'data': recv_data,
@@ -396,9 +396,9 @@ class RobotArmController:
         cmd_data.append(calculate_checksum(cmd_data))
         self.bus_write(bytes(cmd_data))
     
-    def get_joint_angle(self, joint_id):
-        """获取指定关节的角度"""
-        logger.info(f"获取关节{joint_id}的角度")
+    def get_joint_move_and_time(self, joint_id):
+        """获取指定关节的最后一次角度参数和时间"""
+        logger.info(f"获取关节 {joint_id} 最后一次的角度参数和时间")
         cmd_data = CMD_TABLE['SERVO_MOVE_TIME_READ'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(calculate_checksum(cmd_data))
@@ -420,9 +420,9 @@ class RobotArmController:
                 }
             
             try:
-                angle = struct.unpack('<H', bytes(data[5:7]))[0]  # 角度值
+                angle = struct.unpack('<H', bytes(data[5:7]))[0]  # 角度参数值
                 time_ms = struct.unpack('<H', bytes(data[7:9]))[0]  # 时间值（毫秒）
-                
+
                 return {
                     'id': joint_id,
                     'angle': angle,
@@ -464,27 +464,27 @@ class RobotArmController:
     
 if __name__ == '__main__':
     controller = RobotArmController()
-    controller.enable_reception(True)
+    controller.enable_reception(False)
     
-    controller.set_joint_angle_use_time(1, 450, 2000)
-    controller.set_joint_angle_use_time(2, 450, 2000)
-    controller.set_joint_angle_use_time(3, 450, 2000)
-    controller.set_joint_angle_use_time(4, 450, 2000)
-    controller.set_joint_angle_use_time(5, 450, 2000)
-    controller.set_joint_angle_use_time(6, 450, 2000)
+    controller.set_joint_angle_use_time(1, 500, 2000)
+    controller.set_joint_angle_use_time(2, 500, 2000)
+    controller.set_joint_angle_use_time(3, 500, 2000)
+    controller.set_joint_angle_use_time(4, 500, 2000)
+    controller.set_joint_angle_use_time(5, 500, 2000)
+    controller.set_joint_angle_use_time(6, 500, 2000)
     
-    logger.info(f"关节1角度: {controller.get_joint_angle(1)}")
-    logger.info(f"关节2角度: {controller.get_joint_angle(2)}")
-    logger.info(f"关节3角度: {controller.get_joint_angle(3)}")
-    logger.info(f"关节4角度: {controller.get_joint_angle(4)}")
-    logger.info(f"关节5角度: {controller.get_joint_angle(5)}")
-    logger.info(f"关节6角度: {controller.get_joint_angle(6)}")
-    logger.info(f"关节1 ID: {controller.get_joint_id(1)}")
-    logger.info(f"关节2 ID: {controller.get_joint_id(2)}")
-    logger.info(f"关节3 ID: {controller.get_joint_id(3)}")
-    logger.info(f"关节4 ID: {controller.get_joint_id(4)}")
-    logger.info(f"关节5 ID: {controller.get_joint_id(5)}")
-    logger.info(f"关节6 ID: {controller.get_joint_id(6)}")
+    # logger.info(f"关节1角度: {controller.get_joint_angle(1)}")
+    # logger.info(f"关节2角度: {controller.get_joint_angle(2)}")
+    # logger.info(f"关节3角度: {controller.get_joint_angle(3)}")
+    # logger.info(f"关节4角度: {controller.get_joint_angle(4)}")
+    # logger.info(f"关节5角度: {controller.get_joint_angle(5)}")
+    # logger.info(f"关节6角度: {controller.get_joint_angle(6)}")
+    # logger.info(f"关节1 ID: {controller.get_joint_id(1)}")
+    # logger.info(f"关节2 ID: {controller.get_joint_id(2)}")
+    # logger.info(f"关节3 ID: {controller.get_joint_id(3)}")
+    # logger.info(f"关节4 ID: {controller.get_joint_id(4)}")
+    # logger.info(f"关节5 ID: {controller.get_joint_id(5)}")
+    # logger.info(f"关节6 ID: {controller.get_joint_id(6)}")
     
     
     # controller.set_joint_angle_with_time_after_start(1, 100, 10000)
