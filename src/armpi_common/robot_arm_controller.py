@@ -14,6 +14,7 @@ import serial
 
 from armpi_common.cmdTable import CMD_TABLE
 from armpi_common.utils import calculate_checksum, get_command_info_by_id, split_to_bytes
+from armpi_common._log import logger
 
 class PacketControllerState(enum.IntEnum):
     PACKET_CONTROLLER_STATE_STARTBYTE1 = 0
@@ -56,7 +57,7 @@ class RobotArmController:
     
     def recv_task(self):
         try:
-            print(f"开始接收数据")
+            logger.info("接收数据线程启动")
             while True:
                 if self.enable_recv:
                     recv_data = self.serial_client.read()
@@ -124,7 +125,7 @@ class RobotArmController:
                                 # print(f"接收到的校验和: %0.2x" % data)
                                 if data:
                                     self.packet_report_serial_servo(self.frame)
-                                    print(f"接收到数据包, 验证完整, 发送给队列: {list(map(lambda x: hex(x), self.frame))}")
+                                    logger.debug(f"接收到数据包, 验证完整, 发送给队列: {list(map(lambda x: hex(x), self.frame))}")
                                     self.frame = []
                                     self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
                                 else:
@@ -133,14 +134,14 @@ class RobotArmController:
                     else:
                         time.sleep(0.01)
         except Exception as e:
-            print(f"发生异常: {e}")
+            logger.error(f"发生异常: {e}")
     
     def servo_read_and_unpack(self, cmd):
         """读取舵机数据并解包"""
         if self.enable_recv:
             with self.servo_read_lock:
-                print(f"开始读取舵机数据")
-                print(f"发送的数据: {cmd}")
+                logger.info("开始读取舵机数据")
+                logger.debug(f"发送的数据: {cmd}")
                 count = 0
                 while True:
                     self.bus_write(bytes(cmd))
@@ -149,23 +150,23 @@ class RobotArmController:
                         recv_data = self.servo_recv_queue.get(block=True, timeout=0.1)
                         break
                     except queue.Empty:
-                        print(f"读取舵机数据失败，重试 {count} 次")
+                        logger.warning(f"读取舵机数据失败，重试 {count} 次")
                         count += 1
-                        print(f"重新发送命令: {cmd}")
+                        logger.debug(f"重新发送命令: {cmd}")
                         self.bus_write(bytes(cmd))
                         if count > self.retry_times:
                             recv_data = None
                             break                        
                 
                 if recv_data is not None:
-                    print(f"解包数据: {recv_data}")
+                    logger.debug(f"解包数据: {recv_data}")
                     return {
                         'status': True,
                         'data': recv_data,
                         'info': "数据解析成功"
                     }
                 else:
-                    print("返回的数据为空")
+                    logger.warning("返回的数据为空")
                     return {
                         'status': False,
                         'data': None,
@@ -352,7 +353,7 @@ class RobotArmController:
         :param angle: 关节角度
         :param time: 到达该角度的花费的时间
         """
-        print(f"设置关节{joint_id}的角度为{angle}，预计花费{time}ms")
+        logger.info(f"设置关节{joint_id}的角度为{angle}，预计花费{time}ms")
         cmd_data = CMD_TABLE['SERVO_MOVE_TIME_WRITE'].copy()   
         cmd_data[2] = joint_id
         if angle is not None and time is not None:
@@ -369,7 +370,7 @@ class RobotArmController:
         :param angle: 关节角度
         :param delay_time: 延迟指定时间后到达该角度的
         """
-        print(f"设置关节{joint_id}的角度为{angle}，延迟{delay_time}ms后到达")
+        logger.info(f"设置关节{joint_id}的角度为{angle}，延迟{delay_time}ms后到达")
         cmd_data = CMD_TABLE['SERVO_MOVE_TIME_WAIT_WRITE'].copy()
         cmd_data[2] = joint_id
         if angle is not None and delay_time is not None:
@@ -381,7 +382,7 @@ class RobotArmController:
     
     def set_joint_move_start(self, joint_id):
         """启动指定关节的运动"""
-        print(f"启动关节{joint_id}的运动")
+        logger.info(f"启动关节{joint_id}的运动")
         cmd_data = CMD_TABLE['SERVO_MOVE_START'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(calculate_checksum(cmd_data))
@@ -389,7 +390,7 @@ class RobotArmController:
     
     def set_joint_emergency_stop(self, joint_id):
         """指定关节紧急停止运动"""
-        print(f"紧急停止关节{joint_id}的运动")
+        logger.warning(f"紧急停止关节{joint_id}的运动")
         cmd_data = CMD_TABLE['SERVO_MOVE_STOP'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(calculate_checksum(cmd_data))
@@ -397,7 +398,7 @@ class RobotArmController:
     
     def get_joint_angle(self, joint_id):
         """获取指定关节的角度"""
-        print(f"\n获取关节{joint_id}的角度")
+        logger.info(f"获取关节{joint_id}的角度")
         cmd_data = CMD_TABLE['SERVO_MOVE_TIME_READ'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(calculate_checksum(cmd_data))
@@ -444,7 +445,7 @@ class RobotArmController:
     
     def get_joint_id(self, joint_id):
         """获取指定关节的ID"""
-        print(f"\n获取关节{joint_id}的ID")
+        logger.info(f"获取关节{joint_id}的ID")
         cmd_data = CMD_TABLE['SERVO_ID_READ'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(calculate_checksum(cmd_data))
@@ -465,24 +466,26 @@ if __name__ == '__main__':
     controller = RobotArmController()
     controller.enable_reception(True)
     
-    controller.set_joint_angle_use_time(1, 500, 1000)
-    controller.set_joint_angle_use_time(2, 500, 1000)
-    controller.set_joint_angle_use_time(3, 500, 1000)
-    controller.set_joint_angle_use_time(4, 500, 1000)
-    controller.set_joint_angle_use_time(5, 500, 1000)
-    controller.set_joint_angle_use_time(6, 500, 1000)
-    print(controller.get_joint_angle(1))
-    print(controller.get_joint_angle(2))
-    print(controller.get_joint_angle(3))
-    print(controller.get_joint_angle(4))
-    print(controller.get_joint_angle(5))
-    print(controller.get_joint_angle(6))
-    print(controller.get_joint_id(1))
-    print(controller.get_joint_id(2))
-    print(controller.get_joint_id(3))
-    print(controller.get_joint_id(4))
-    print(controller.get_joint_id(5))
-    print(controller.get_joint_id(6))
+    controller.set_joint_angle_use_time(1, 450, 2000)
+    controller.set_joint_angle_use_time(2, 450, 2000)
+    controller.set_joint_angle_use_time(3, 450, 2000)
+    controller.set_joint_angle_use_time(4, 450, 2000)
+    controller.set_joint_angle_use_time(5, 450, 2000)
+    controller.set_joint_angle_use_time(6, 450, 2000)
+    
+    logger.info(f"关节1角度: {controller.get_joint_angle(1)}")
+    logger.info(f"关节2角度: {controller.get_joint_angle(2)}")
+    logger.info(f"关节3角度: {controller.get_joint_angle(3)}")
+    logger.info(f"关节4角度: {controller.get_joint_angle(4)}")
+    logger.info(f"关节5角度: {controller.get_joint_angle(5)}")
+    logger.info(f"关节6角度: {controller.get_joint_angle(6)}")
+    logger.info(f"关节1 ID: {controller.get_joint_id(1)}")
+    logger.info(f"关节2 ID: {controller.get_joint_id(2)}")
+    logger.info(f"关节3 ID: {controller.get_joint_id(3)}")
+    logger.info(f"关节4 ID: {controller.get_joint_id(4)}")
+    logger.info(f"关节5 ID: {controller.get_joint_id(5)}")
+    logger.info(f"关节6 ID: {controller.get_joint_id(6)}")
+    
     
     # controller.set_joint_angle_with_time_after_start(1, 100, 10000)
     # controller.set_joint_move_start(1)
