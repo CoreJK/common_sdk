@@ -90,7 +90,9 @@ class RobotArmController:
                             elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_LENGTH:
                                 if data:
                                     self.frame.append(data)
-                                    self.data_length = self.frame[3] - 3
+                                    # 数据长度字段表示整个数据包的长度，包括ID、长度、指令、数据和校验和
+                                    self.data_length = data - 3  # 减去ID、长度、指令字段的长度
+                                    self.recv_count = 0  # 重置接收计数器
                                     self.state = PacketControllerState.PACKET_CONTROLLER_STATE_CMD
                                 else:
                                     self.frame = []
@@ -404,14 +406,34 @@ class RobotArmController:
         if recv_data['status'] == True:
             # 数据包结构: [帧头1, 帧头2, ID, 长度, 指令, 角度低字节, 角度高字节, 时间低字节, 时间高字节, 校验和]
             # 机械臂返回的数据使用小端序格式，直接读取即可
-            angle = struct.unpack('<H', bytes(recv_data['data'][5:7]))[0]  # 角度值
-            time_ms = struct.unpack('<H', bytes(recv_data['data'][7:9]))[0]  # 时间值（毫秒）
+            data = recv_data['data']
             
-            return {
-                'id': joint_id,
-                'angle': angle,
-                'time_ms': time_ms
-            }
+            # 验证数据包长度
+            expected_length = 9  # 帧头(2) + ID(1) + 长度(1) + 指令(1) + 角度(2) + 时间(2)
+            if len(data) < expected_length:
+                return {
+                    'id': joint_id,
+                    'angle': None,
+                    'time_ms': None,
+                    "info": f"数据包长度不足，期望{expected_length}字节，实际{len(data)}字节"
+                }
+            
+            try:
+                angle = struct.unpack('<H', bytes(data[5:7]))[0]  # 角度值
+                time_ms = struct.unpack('<H', bytes(data[7:9]))[0]  # 时间值（毫秒）
+                
+                return {
+                    'id': joint_id,
+                    'angle': angle,
+                    'time_ms': time_ms
+                }
+            except struct.error as e:
+                return {
+                    'id': joint_id,
+                    'angle': None,
+                    'time_ms': None,
+                    "info": f"数据解析错误: {e}"
+                }
         else:
             return {
                 'id': joint_id,
@@ -443,24 +465,24 @@ if __name__ == '__main__':
     controller = RobotArmController()
     controller.enable_reception(True)
     
-    # controller.set_joint_angle_use_time(1, 500, 1000)
-    # controller.set_joint_angle_use_time(2, 500, 1000)
-    # controller.set_joint_angle_use_time(3, 500, 1000)
-    # controller.set_joint_angle_use_time(4, 500, 1000)
-    # controller.set_joint_angle_use_time(5, 500, 1000)
-    # controller.set_joint_angle_use_time(6, 500, 1000)
+    controller.set_joint_angle_use_time(1, 500, 1000)
+    controller.set_joint_angle_use_time(2, 500, 1000)
+    controller.set_joint_angle_use_time(3, 500, 1000)
+    controller.set_joint_angle_use_time(4, 500, 1000)
+    controller.set_joint_angle_use_time(5, 500, 1000)
+    controller.set_joint_angle_use_time(6, 500, 1000)
     print(controller.get_joint_angle(1))
     print(controller.get_joint_angle(2))
     print(controller.get_joint_angle(3))
     print(controller.get_joint_angle(4))
     print(controller.get_joint_angle(5))
     print(controller.get_joint_angle(6))
-    # print(controller.get_joint_id(1))
-    # print(controller.get_joint_id(2))
-    # print(controller.get_joint_id(3))
-    # print(controller.get_joint_id(4))
-    # print(controller.get_joint_id(5))
-    # print(controller.get_joint_id(6))
+    print(controller.get_joint_id(1))
+    print(controller.get_joint_id(2))
+    print(controller.get_joint_id(3))
+    print(controller.get_joint_id(4))
+    print(controller.get_joint_id(5))
+    print(controller.get_joint_id(6))
     
     # controller.set_joint_angle_with_time_after_start(1, 100, 10000)
     # controller.set_joint_move_start(1)
