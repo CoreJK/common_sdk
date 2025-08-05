@@ -8,6 +8,7 @@ import threading
 from queue import Queue
 import struct
 import time
+import copy
 
 import serial
 
@@ -34,7 +35,7 @@ class RobotArmController:
 
         # 数据接收相关        
         self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
-        self.frame = []
+        self.frame = []  # 数据包
         self.recv_count = 0
         self.data_length = 0
         self.retry_times = 10
@@ -55,12 +56,13 @@ class RobotArmController:
     
     def recv_task(self):
         try:
+            print(f"开始接收数据")
             while True:
                 if self.enable_recv:
                     recv_data = self.serial_client.read()
                     if recv_data:
                         for data in recv_data:
-                            print(f"recv_data: %0.2x" % data)
+                            # print(f"recv_data: %0.2x" % data)
                             if self.state == PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1:
                                 if data == 0x55:
                                     self.frame.append(data)
@@ -116,44 +118,63 @@ class RobotArmController:
                             elif self.state == PacketControllerState.PACKET_CONTROLLER_STATE_CHECKSUM:
                                 # todo 计算校验和， 如果校验和正确，则将数据包发送给队列
                                 crc_checksum = calculate_checksum(self.frame)
-                                print(f"计算校验和: %0.2x" % crc_checksum)
-                                print(f"接收到的校验和: %0.2x" % data)
+                                # print(f"计算校验和: %0.2x" % crc_checksum)
+                                # print(f"接收到的校验和: %0.2x" % data)
                                 if data:
                                     self.packet_report_serial_servo(self.frame)
-                                    print(f"数据包发送给队列: {list(map(lambda x: hex(x), self.frame))}")
+                                    print(f"接收到数据包, 验证完整, 发送给队列: {list(map(lambda x: hex(x), self.frame))}")
                                     self.frame = []
                                     self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
                                 else:
                                     self.frame = []
                                     self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
-                                
+                    else:
+                        time.sleep(0.01)
         except Exception as e:
             print(f"发生异常: {e}")
-        finally:
-            self.serial_client.close()
     
-    def servo_read_and_unpack(self, cmd, unpack_format):
+    def servo_read_and_unpack(self, cmd):
         """读取舵机数据并解包"""
-        with self.servo_read_lock:
-            count = 0
-            while True:
-                self.bus_write(bytes(cmd))
+        if self.enable_recv:
+            with self.servo_read_lock:
+                print(f"开始读取舵机数据")
+                print(f"发送的数据: {cmd}")
+                count = 0
+                while True:
+                    self.bus_write(bytes(cmd))
+                    
+                    try:
+                        recv_data = self.servo_recv_queue.get(block=True, timeout=0.1)
+                        break
+                    except queue.Empty:
+                        print(f"读取舵机数据失败，重试 {count} 次")
+                        count += 1
+                        print(f"重新发送命令: {cmd}")
+                        self.bus_write(bytes(cmd))
+                        if count > self.retry_times:
+                            recv_data = None
+                            break                        
                 
-                try:
-                    recv_data = self.servo_recv_queue.get(block=True, timeout=0.1)
-                    break
-                except queue.Empty:
-                    count += 1
-                    if count > self.retry_times:
-                        recv_data = None
-                        raise Exception('读取舵机数据失败')
-                    break
-            
-            if recv_data is not None:
-                print(f"解包数据: {recv_data}")
-            else:
-                print("返回的数据为空")
-                return None
+                if recv_data is not None:
+                    print(f"解包数据: {recv_data}")
+                    return {
+                        'status': True,
+                        'data': recv_data,
+                        'info': "数据解析成功"
+                    }
+                else:
+                    print("返回的数据为空")
+                    return {
+                        'status': False,
+                        'data': None,
+                        'info': "返回的数据为空"
+                    }
+        else:
+            return {
+                "status": False,
+                "data": None,
+                "info": "未开启接收数据功能"
+            }
     
     def bus_write(self, cmd_data):
         """只负责发送已经构造好的数据"""
@@ -203,7 +224,7 @@ class RobotArmController:
         :param int load_or_unload: 
             0 - 负载
         """
-        cmd_data = CMD_TABLE['SERVO_LOAD_OR_UNLOAD_WRITE']
+        cmd_data = CMD_TABLE['SERVO_LOAD_OR_UNLOAD_WRITE'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(load_or_unload)
         cmd_data.append(calculate_checksum(cmd_data))
@@ -215,7 +236,7 @@ class RobotArmController:
         :param int joint_id: 关节ID
         :param int new_id: 新的ID
         """
-        cmd_data = CMD_TABLE['SERVO_ID_WRITE']
+        cmd_data = CMD_TABLE['SERVO_ID_WRITE'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(new_id)
         cmd_data.append(calculate_checksum(cmd_data))
@@ -228,7 +249,7 @@ class RobotArmController:
         :param int vin_min: 电压最小值: 4500 ~ 12000 毫伏
         :param int vin_max: 电压最大值： 4500 ~ 12000 毫伏
         """
-        cmd_data = CMD_TABLE['SERVO_VIN_LIMIT_WRITE']
+        cmd_data = CMD_TABLE['SERVO_VIN_LIMIT_WRITE'].copy()
         cmd_data[2] = joint_id
         cmd_data.extend(list(struct.pack('<HH', vin_min, vin_max)))
         cmd_data.append(calculate_checksum(cmd_data))
@@ -241,7 +262,7 @@ class RobotArmController:
         :param int angle_min: 角度最小值
         :param int angle_max: 角度最大值
         """
-        cmd_data = CMD_TABLE['SERVO_ANGLE_LIMIT_WRITE']
+        cmd_data = CMD_TABLE['SERVO_ANGLE_LIMIT_WRITE'].copy()
         cmd_data[2] = joint_id
         cmd_data.extend(list(struct.pack('<HH', angle_min, angle_max)))
         cmd_data.append(calculate_checksum(cmd_data))
@@ -253,7 +274,7 @@ class RobotArmController:
         :param int joint_id: 关节ID
         :param int angle_offset: 角度偏移量, 舵机内部的偏差值，范围 -125~125 ，对应角度为-30°~30°
         """
-        cmd_data = CMD_TABLE['SERVO_ANGLE_OFFSET_ADJUST']
+        cmd_data = CMD_TABLE['SERVO_ANGLE_OFFSET_ADJUST'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(angle_offset)
         cmd_data.append(calculate_checksum(cmd_data))
@@ -265,7 +286,7 @@ class RobotArmController:
         :param int joint_id: 关节ID
         :param int angle_offset: 角度偏移量
         """
-        cmd_data = CMD_TABLE['SERVO_ANGLE_OFFSET_WRITE']
+        cmd_data = CMD_TABLE['SERVO_ANGLE_OFFSET_WRITE'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(angle_offset)
         cmd_data.append(calculate_checksum(cmd_data))
@@ -281,7 +302,7 @@ class RobotArmController:
         :param int joint_id: 关节ID
         :param int temp_limit: 温度限制 50 ~ 100 摄氏度, 默认为 85 摄氏度
         """
-        cmd_data = CMD_TABLE['SERVO_TEMP_MAX_LIMIT_WRITE']
+        cmd_data = CMD_TABLE['SERVO_TEMP_MAX_LIMIT_WRITE'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(temp_limit)
         cmd_data.append(calculate_checksum(cmd_data))
@@ -295,7 +316,7 @@ class RobotArmController:
             0 - LED 常亮
             1 - LED 常灭
         """
-        cmd_data = CMD_TABLE['SERVO_LED_CTRL_WRITE']
+        cmd_data = CMD_TABLE['SERVO_LED_CTRL_WRITE'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(led_ctrl)
         cmd_data.append(calculate_checksum(cmd_data))
@@ -315,7 +336,7 @@ class RobotArmController:
             6 - 过压和堵转
             7 - 过温、过压和堵转
         """
-        cmd_data = CMD_TABLE['SERVO_LED_ERROR_WRITE']
+        cmd_data = CMD_TABLE['SERVO_LED_ERROR_WRITE'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(led_error)
         cmd_data.append(calculate_checksum(cmd_data))
@@ -329,7 +350,8 @@ class RobotArmController:
         :param angle: 关节角度
         :param time: 到达该角度的花费的时间
         """
-        cmd_data = CMD_TABLE['SERVO_MOVE_TIME_WRITE']
+        print(f"设置关节{joint_id}的角度为{angle}，预计花费{time}ms")
+        cmd_data = CMD_TABLE['SERVO_MOVE_TIME_WRITE'].copy()   
         cmd_data[2] = joint_id
         if angle is not None and time is not None:
             cmd_data.extend(list(struct.pack('<HH', angle, time)))
@@ -345,7 +367,8 @@ class RobotArmController:
         :param angle: 关节角度
         :param delay_time: 延迟指定时间后到达该角度的
         """
-        cmd_data = CMD_TABLE['SERVO_MOVE_TIME_WAIT_WRITE']
+        print(f"设置关节{joint_id}的角度为{angle}，延迟{delay_time}ms后到达")
+        cmd_data = CMD_TABLE['SERVO_MOVE_TIME_WAIT_WRITE'].copy()
         cmd_data[2] = joint_id
         if angle is not None and delay_time is not None:
             cmd_data.extend(list(struct.pack('<HH', angle, delay_time)))
@@ -356,35 +379,89 @@ class RobotArmController:
     
     def set_joint_move_start(self, joint_id):
         """启动指定关节的运动"""
-        cmd_data = CMD_TABLE['SERVO_MOVE_START']
+        print(f"启动关节{joint_id}的运动")
+        cmd_data = CMD_TABLE['SERVO_MOVE_START'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(calculate_checksum(cmd_data))
         self.bus_write(bytes(cmd_data))
     
     def set_joint_emergency_stop(self, joint_id):
         """指定关节紧急停止运动"""
-        cmd_data = CMD_TABLE['SERVO_MOVE_STOP']
+        print(f"紧急停止关节{joint_id}的运动")
+        cmd_data = CMD_TABLE['SERVO_MOVE_STOP'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(calculate_checksum(cmd_data))
         self.bus_write(bytes(cmd_data))
     
     def get_joint_angle(self, joint_id):
         """获取指定关节的角度"""
-        cmd_data = CMD_TABLE['SERVO_MOVE_TIME_READ']
+        print(f"\n获取关节{joint_id}的角度")
+        cmd_data = CMD_TABLE['SERVO_MOVE_TIME_READ'].copy()
         cmd_data[2] = joint_id
         cmd_data.append(calculate_checksum(cmd_data))
-        recv_data = self.servo_read_and_unpack(cmd_data, '<h')
-        # todo 将数据转换成可读的十进制，取出角度和时间
-        # angle = recv_data[]
-        # time = recv_data[1]
-        # print(f"关节{joint_id}的角度: {angle}, 时间: {time}")
-        return recv_data
+        recv_data= self.servo_read_and_unpack(cmd_data)
+        
+        if recv_data['status'] == True:
+            # 数据包结构: [帧头1, 帧头2, ID, 长度, 指令, 角度低字节, 角度高字节, 时间低字节, 时间高字节, 校验和]
+            # 机械臂返回的数据使用小端序格式，直接读取即可
+            angle = struct.unpack('<H', bytes(recv_data['data'][5:7]))[0]  # 角度值
+            time_ms = struct.unpack('<H', bytes(recv_data['data'][7:9]))[0]  # 时间值（毫秒）
+            
+            return {
+                'id': joint_id,
+                'angle': angle,
+                'time_ms': time_ms
+            }
+        else:
+            return {
+                'id': joint_id,
+                'angle': None,
+                'time_ms': None,
+                "info": recv_data['info']
+            }
+    
+    def get_joint_id(self, joint_id):
+        """获取指定关节的ID"""
+        print(f"\n获取关节{joint_id}的ID")
+        cmd_data = CMD_TABLE['SERVO_ID_READ'].copy()
+        cmd_data[2] = joint_id
+        cmd_data.append(calculate_checksum(cmd_data))
+        recv_data= self.servo_read_and_unpack(cmd_data)
+        if recv_data['status'] == True:
+            return {
+                'id': joint_id,
+                'current_id': recv_data['data'][5]
+            }
+        else:
+            return {
+                'id': joint_id,
+                'current_id': None,
+                'info': recv_data['info']
+            }
     
 if __name__ == '__main__':
     controller = RobotArmController()
     controller.enable_reception(True)
+    
     # controller.set_joint_angle_use_time(1, 500, 1000)
-    controller.get_joint_angle(1)
+    # controller.set_joint_angle_use_time(2, 500, 1000)
+    # controller.set_joint_angle_use_time(3, 500, 1000)
+    # controller.set_joint_angle_use_time(4, 500, 1000)
+    # controller.set_joint_angle_use_time(5, 500, 1000)
+    # controller.set_joint_angle_use_time(6, 500, 1000)
+    print(controller.get_joint_angle(1))
+    print(controller.get_joint_angle(2))
+    print(controller.get_joint_angle(3))
+    print(controller.get_joint_angle(4))
+    print(controller.get_joint_angle(5))
+    print(controller.get_joint_angle(6))
+    # print(controller.get_joint_id(1))
+    # print(controller.get_joint_id(2))
+    # print(controller.get_joint_id(3))
+    # print(controller.get_joint_id(4))
+    # print(controller.get_joint_id(5))
+    # print(controller.get_joint_id(6))
+    
     # controller.set_joint_angle_with_time_after_start(1, 100, 10000)
     # controller.set_joint_move_start(1)
     # time.sleep(2)
