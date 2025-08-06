@@ -2,19 +2,17 @@
 # robot_arm_controller.py - 机械臂控制器
 
 import enum
-from itertools import count
+import time
+import struct
 import queue
 import threading
-from queue import Queue
-import struct
-import time
-import copy
 
 import serial
 
+from armpi_common.utils import calculate_checksum, split_to_bytes
 from armpi_common.cmdTable import CMD_TABLE
-from armpi_common.utils import calculate_checksum, get_command_info_by_id, split_to_bytes
 from armpi_common._log import logger
+
 
 class PacketControllerState(enum.IntEnum):
     PACKET_CONTROLLER_STATE_STARTBYTE1 = 0
@@ -32,22 +30,25 @@ class RobotArmController:
         self.serial_client = serial.Serial(device, baudrate, timeout=timeout)
         self.serial_client.rts = False
         self.serial_client.dtr = False
-        self.enable_recv = False
+        self.__enable_recv = False  # 是否开启接收数据包功能
 
         # 数据接收相关        
         self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
         self.frame = []  # 数据包
-        self.recv_count = 0
-        self.data_length = 0
-        self.retry_times = 10
-        self.servo_recv_queue = Queue(maxsize=1)
-        self.servo_read_lock = threading.Lock()
+        self.recv_count = 0  # 接收计数器
+        self.data_length = 0  # 数据长度 
+        self.retry_times = 10  # 重试次数
+        self.servo_recv_queue = queue.Queue(maxsize=1)  # 舵机数据接收队列
+        self.servo_read_lock = threading.Lock()  # 舵机数据读取线程锁
+        self.start_recv_task()  # 启动数据接收线程
+        
+    
+    def start_recv_task(self):
         threading.Thread(target=self.recv_task, daemon=True).start()
         time.sleep(0.1)
         
-        
     def enable_reception(self, enable=True):
-        self.enable_recv = enable
+        self.__enable_recv = enable
     
     def packet_report_serial_servo(self, data):
         try:
@@ -59,7 +60,7 @@ class RobotArmController:
         try:
             logger.info("接收数据线程启动")
             while True:
-                if self.enable_recv:
+                if self.__enable_recv:
                     recv_data = self.serial_client.read()
                     if recv_data:
                         for data in recv_data:
@@ -149,7 +150,7 @@ class RobotArmController:
     
     def servo_read_and_unpack(self, cmd):
         """读取舵机数据并解包"""
-        if self.enable_recv:
+        if self.__enable_recv:
             with self.servo_read_lock:
                 logger.info("开始读取舵机数据")
                 logger.debug(f"发送的读取指令: {list(map(lambda x: hex(x), cmd))}")
