@@ -886,7 +886,7 @@ if __name__ == '__main__':
     # controller.set_joint_move_start(1)
     # time.sleep(2)
     # todo: 待调试
-    # logger.info(f"关节1角度和时间: {controller.get_joint_move_and_wait_time(1)}")
+    logger.info(f"关节1角度和时间: {controller.get_joint_move_and_wait_time(1)}")
     
     # logger.info(f"关节1角度偏移量: {controller.get_joint_angle_offset(1)}")
     # logger.info(f"关节2角度偏移量: {controller.get_joint_angle_offset(2)}")
