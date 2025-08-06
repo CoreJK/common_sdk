@@ -223,7 +223,3 @@ Checksum = ~(ID + Length + cmd + Parm 1 + parm N)
 ## 许可证
 
 MIT License
-
-## 作者
-
-求余 (corejk@163.com)
