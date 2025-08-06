@@ -15,7 +15,7 @@
   - LED 控制和错误处理
   - 紧急停止功能
 
-- 🔄 **读指令支持** (开发中)
+- ✅ **读指令支持** (14/14)
   - 舵机状态读取
   - 位置、温度、电压监控
   - 配置参数读取
@@ -91,6 +91,29 @@ controller.set_joint_angle_limit(1, 0, 1000)  # 0-1000度
 controller.set_joint_led(1, 0)  # LED常亮
 ```
 
+### 状态监控
+
+```python
+# 启用数据接收功能（读指令需要）
+controller.enable_reception(True)
+
+# 读取关节位置
+position = controller.get_joint_position(1)
+print(f"关节1位置: {position}")
+
+# 读取关节温度
+temp = controller.get_joint_temp(1)
+print(f"关节1温度: {temp}")
+
+# 读取关节电压
+voltage = controller.get_joint_input_voltage(1)
+print(f"关节1电压: {voltage}")
+
+# 读取关节模式和速度
+mode_speed = controller.get_joint_mode_and_speed(1)
+print(f"关节1模式和速度: {mode_speed}")
+```
+
 ## API 文档
 
 ### RobotArmController
@@ -141,6 +164,29 @@ RobotArmController(device='/dev/ttyUSB0', baudrate=115200, timeout=0)
 
 - `set_joint_id(joint_id, new_id)`: 设置舵机ID
 
+##### 状态读取
+
+- `get_joint_position(joint_id)`: 获取关节当前位置
+- `get_joint_temp(joint_id)`: 获取关节温度
+- `get_joint_input_voltage(joint_id)`: 获取关节输入电压
+- `get_joint_mode_and_speed(joint_id)`: 获取关节模式和速度
+- `get_joint_load_or_unload(joint_id)`: 获取关节负载状态
+
+##### 参数读取
+
+- `get_joint_move_and_time(joint_id)`: 获取最后一次角度参数和时间
+- `get_joint_move_and_wait_time(joint_id)`: 获取最后一次角度参数和延迟启动时间
+- `get_joint_angle_offset(joint_id)`: 获取角度偏移量
+- `get_joint_angle_limit(joint_id)`: 获取角度限制
+- `get_joint_vin_limit(joint_id)`: 获取电压限制
+- `get_joint_temp_max_limit(joint_id)`: 获取温度限制
+
+##### 配置读取
+
+- `get_joint_id(joint_id)`: 获取舵机ID
+- `get_joint_led_ctrl(joint_id)`: 获取LED控制状态
+- `get_joint_led_error(joint_id)`: 获取LED错误配置
+
 ## 通信协议
 
 ### 数据包格式
@@ -166,7 +212,7 @@ Checksum = ~(ID + Length + cmd + Parm 1 + parm N)
 ## 开发状态
 
 - ✅ 写指令接口：100% 完成 (14/14)
-- 🔄 读指令接口：开发中 (0/14)
+- ✅ 读指令接口：100% 完成 (14/14)
 - ✅ 工具函数：完成
 - ✅ 协议解析：完成
 
@@ -180,4 +226,4 @@ MIT License
 
 ## 作者
 
-任伟明 (corejk@163.com)
+求余 (corejk@163.com)
