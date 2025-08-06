@@ -5,7 +5,7 @@ description = "armpi 通信 sdk"
 authors = [
     {name = "任伟明", email = "corejk@163.com"},
 ]
-dependencies = ["pyserial-asyncio>=0.6"]
+dependencies = ["pyserial>=3.5"]
 requires-python = ">=3.8"
 readme = "README.md"
 license = {text = "MIT"}
