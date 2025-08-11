@@ -857,9 +857,13 @@ class RobotArmController:
                 'info': recv_data['info']
             }
     
+    def close_connection(self):
+        logger.info("机械臂断开连接")
+        self.enable_reception(False)
+        self.serial_client.close()
     
 if __name__ == '__main__':
-    controller = RobotArmController()
+    controller = RobotArmController(device="COM7")
     controller.enable_reception(True)
     
     # controller.set_joint_angle_use_time(1, 500, 2000)
@@ -876,7 +880,7 @@ if __name__ == '__main__':
     # logger.info(f"关节5角度: {controller.get_joint_move_and_time(5)}")
     # logger.info(f"关节6角度: {controller.get_joint_move_and_time(6)}")
     
-    # logger.info(f"关节1 ID: {controller.get_joint_id(1)}")
+    logger.info(f"关节1 ID: {controller.get_joint_id(1)}")
     # logger.info(f"关节2 ID: {controller.get_joint_id(2)}")
     # logger.info(f"关节3 ID: {controller.get_joint_id(3)}")
     # logger.info(f"关节4 ID: {controller.get_joint_id(4)}")
