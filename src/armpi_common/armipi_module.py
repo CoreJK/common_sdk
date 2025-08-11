@@ -91,38 +91,38 @@ class RobotArmModule(DHRobot):
     def __init__(self):
         L1 = RevoluteMDH(
             alpha = 0,
-            d = 0,
+            d = base_link,
             a = 0,
             offset = 0,
-            qlim = (radians(-120), radians(120))
+            qlim = (radians(-120.2), radians(120.2))
         )
         L2 = RevoluteMDH(
             alpha = radians(-90),
             d = 0,
             a = 0,
             offset = 0,
-            qlim = (radians(-180), radians(0))
+            qlim = (radians(-180.2), radians(0.2))
         )
         L3 = RevoluteMDH(
             alpha = 0,
             d = 0,
             a = link1,
             offset = 0,
-            qlim = (radians(-120), radians(120))
+            qlim = (radians(-120.2), radians(120.2))
         )
         L4 = RevoluteMDH(
             alpha = 0,
             d = 0,
             a = link2,
             offset = 0,
-            qlim = (radians(-200), radians(20))
+            qlim = (radians(-200.2), radians(20.2))
         )
         L5 = RevoluteMDH(
             alpha = radians(-90),
             d = 0,
             a = 0,
             offset = 0,
-            qlim = (radians(-120), radians(120))
+            qlim = (radians(-120.2), radians(120.2))
         )
         
         super().__init__(
@@ -154,7 +154,17 @@ if __name__ == "__main__":
     q4 = radians(0)
     q5 = radians(0)
 
+    
+    
+    # 机械臂正解
+    translation_vector = robot.fkine(np.radians([q1, q2, q3, q4, q5]))
+    x, y, z = np.round(translation_vector.t, 3)  # 平移向量
+    Rx, Py, Yz = np.round(translation_vector.rpy(order="zyx"), 3)  # 旋转角
+    
+    print(f"x: {x}, y: {y}, z: {z}")
+    print(f"Rx: {Rx}, Py: {Py}, Yz: {Yz}")
+    
+    
     # 机械臂画图
     robot.teach([q1, q2, q3, q4, q5], block=True)
-        
         
