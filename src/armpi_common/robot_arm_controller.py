@@ -880,7 +880,7 @@ if __name__ == '__main__':
     # logger.info(f"关节5角度: {controller.get_joint_move_and_time(5)}")
     # logger.info(f"关节6角度: {controller.get_joint_move_and_time(6)}")
     
-    logger.info(f"关节1 ID: {controller.get_joint_id(1)}")
+    # logger.info(f"关节1 ID: {controller.get_joint_id(1)}")
     # logger.info(f"关节2 ID: {controller.get_joint_id(2)}")
     # logger.info(f"关节3 ID: {controller.get_joint_id(3)}")
     # logger.info(f"关节4 ID: {controller.get_joint_id(4)}")
