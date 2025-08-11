@@ -94,35 +94,35 @@ class RobotArmModule(DHRobot):
             d = base_link,
             a = 0,
             offset = 0,
-            qlim = (radians(-120.2), radians(120.2))
+            qlim = (radians(-120), radians(120))
         )
         L2 = RevoluteMDH(
             alpha = radians(-90),
             d = 0,
             a = 0,
             offset = 0,
-            qlim = (radians(-180.2), radians(0.2))
+            qlim = (radians(-180), radians(0))
         )
         L3 = RevoluteMDH(
             alpha = 0,
             d = 0,
             a = link1,
             offset = 0,
-            qlim = (radians(-120.2), radians(120.2))
+            qlim = (radians(-120), radians(120))
         )
         L4 = RevoluteMDH(
             alpha = 0,
             d = 0,
             a = link2,
             offset = 0,
-            qlim = (radians(-200.2), radians(20.2))
+            qlim = (radians(-200), radians(20))
         )
         L5 = RevoluteMDH(
             alpha = radians(-90),
             d = 0,
             a = 0,
             offset = 0,
-            qlim = (radians(-120.2), radians(120.2))
+            qlim = (radians(-120), radians(120))
         )
         
         super().__init__(
