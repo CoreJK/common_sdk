@@ -812,7 +812,7 @@ class RobotArmController:
         R_T = SE3([x, y, z]) * rpy2tr([Rx, Py, Yz], order="zyx")
         sol = self.robot_arm_module.ikine_LM(R_T, joint_limits=True)
         if sol.success:
-            inverse_result = np.round(sol.q, 3).tolist()
+            inverse_result = np.round(sol.q, 6).tolist()
             joint_pluse = angle2pulse([inverse_result], convert_int=True)
             return {
                 "ikine": joint_pluse,
@@ -968,7 +968,7 @@ if __name__ == '__main__':
     controller.enable_reception(True)
     
     # print(controller.get_joint_fkine(current_pose=True))
-    # print(controller.get_joint_ikine(current_pose=True))
+    print(controller.get_joint_ikine(current_pose=True))
     
     # controller.set_joint_angle_use_time(1, 300, 2000)
     # controller.set_joint_angle_use_time(2, 500, 2000)
