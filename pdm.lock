@@ -5,7 +5,7 @@
 groups = ["default", "tests"]
 strategy = ["inherit_metadata"]
 lock_version = "4.5.0"
-content_hash = "sha256:77875b4aeff1980def3e018b7ec056e8fe0ae3f4864e36e7e33d5afa11a760b7"
+content_hash = "sha256:2eda13646e2865fb5f6ece34ba746e1a081029eca8aa8ceebcc229d5f2b557ee"
 
 [[metadata.targets]]
 requires_python = ">=3.8,<3.12"
@@ -121,6 +121,16 @@ groups = ["default"]
 files = [
     {file = "cycler-0.12.1-py3-none-any.whl", hash = "sha256:85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30"},
     {file = "cycler-0.12.1.tar.gz", hash = "sha256:88bb128f02ba341da8ef447245a9e138fae777f6a23943da4540077d3601eb1c"},
+]
+
+[[package]]
+name = "ddt"
+version = "1.7.2"
+summary = "Data-Driven/Decorated Tests"
+groups = ["tests"]
+files = [
+    {file = "ddt-1.7.2-py2.py3-none-any.whl", hash = "sha256:6adcfaf9785f0a36f9e73a89b91e412de9ef8649e289b750e3683bc79d5e2354"},
+    {file = "ddt-1.7.2.tar.gz", hash = "sha256:d215d6b083963013c4a19b1e4dcd6a96e80e43ab77519597a6acfcf2e9a3e04b"},
 ]
 
 [[package]]

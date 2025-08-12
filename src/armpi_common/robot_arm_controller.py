@@ -357,7 +357,6 @@ class RobotArmController:
         cmd_data.append(calculate_checksum(cmd_data))
         self.bus_write(bytes(cmd_data))
     
-    
     def set_joint_angle_use_time(self, joint_id, angle, time):
         """设置指定关节的角度和到达该角度的预计时间
 
