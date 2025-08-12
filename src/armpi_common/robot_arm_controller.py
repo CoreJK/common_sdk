@@ -798,7 +798,14 @@ class RobotArmController:
         logger.info(f"获取机械臂的逆解")
         if current_pose:
             fkine = self.get_joint_fkine(current_pose=True)
-            x, y, z, Rx, Py, Yz = fkine.get("fkine")
+            if fkine.get("fkine") is None:
+                logger.error(f"获取机械臂的正解失败")
+                return {
+                    "ikine": None,
+                    "info": "获取机械臂的正解失败"
+                }
+            else:
+                x, y, z, Rx, Py, Yz = fkine["fkine"]
         else:
             x, y, z, Rx, Py, Yz = list(args)
         
