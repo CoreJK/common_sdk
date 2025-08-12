@@ -15,6 +15,7 @@ from armpi_common._log import logger
 from armpi_common.armipi_module import RobotArmModule
 from armpi_common.armipi_module import angle2pulse, pulse2angle
 
+import numpy as np
 from spatialmath import SE3
 from spatialmath.base import rpy2tr
 
@@ -730,8 +731,11 @@ class RobotArmController:
                 'info': recv_data['info']
             }
     
-    def get_all_joint_position(self):
-        """获取所有关节的位置"""
+    def get_all_joint_position(self, pulse_to_angle=False):
+        """获取所有关节的位置, 默认返回脉冲值
+
+        :param bool pulse_to_angle: True, 返回角度的弧度值, False, 返回脉冲值
+        """
         logger.info(f"获取所有关节的位置")
         position_list = []
         for i in range(1, 6):
@@ -745,12 +749,75 @@ class RobotArmController:
                     "position_list": None,
                     "info": f"获取关节 {i} 的位置失败"
                 }
-        logger.debug(f"获取所有关节的位置成功，位置列表为 {position_list}")
+        
+        if pulse_to_angle:
+            position_list = pulse2angle(position_list)
+            logger.debug(f"获取所有关节的位置成功，位置列表为 {np.round(np.degrees(position_list), 3).tolist()}")
+        else:
+            logger.debug(f"获取所有关节的位置成功，位置列表为 {position_list}")
+            
         return {
             "position_list": position_list,
             "info": "获取所有关节的位置成功"
         }
     
+    def get_joint_fkine(self, *args, current_pose=False):
+        """获取机械臂的正解"""
+        logger.info(f"获取机械臂的正解")
+        if current_pose:
+            position_list = self.get_all_joint_position(pulse_to_angle=True).get("position_list")
+        else:
+            position_list = list(args)
+            if len(position_list) != 5:
+                logger.error(f"关节列表长度为 {len(position_list)}，预期为 5")
+                return {
+                    "fkine": None,
+                    "info": "关节列表为空"
+                }
+            else:
+                position_list = pulse2angle(position_list)
+        
+        if position_list is None:
+            logger.error(f"获取所有关节的位置失败")
+            return {
+                "fkine": None,
+                "info": "获取所有关节的位置失败"
+            }
+        
+        translation_vector = self.robot_arm_module.fkine(position_list)
+        x, y, z = np.round(translation_vector.t, 3)  # 平移向量
+        Rx, Py, Yz = np.round(translation_vector.rpy(order="zyx"), 3) # 旋转角
+        
+        return {
+            "fkine": [x, y, z, Rx, Py, Yz],
+            "info": "获取机械臂的正解成功"
+        }
+    
+    def get_joint_ikine(self, *args, current_pose=False):
+        """获取机械臂的逆解"""
+        logger.info(f"获取机械臂的逆解")
+        if current_pose:
+            fkine = self.get_joint_fkine(current_pose=True)
+            x, y, z, Rx, Py, Yz = fkine.get("fkine")
+        else:
+            x, y, z, Rx, Py, Yz = list(args)
+        
+        R_T = SE3([x, y, z]) * rpy2tr([Rx, Py, Yz], order="zyx")
+        sol = self.robot_arm_module.ikine_LM(R_T, joint_limits=True)
+        if sol.success:
+            inverse_result = np.round(sol.q, 3).tolist()
+            joint_pluse = angle2pulse([inverse_result], convert_int=True)
+            return {
+                "ikine": joint_pluse,
+                "info": "获取机械臂的逆解成功"
+            }
+        else:
+            logger.error(f"获取机械臂的逆解失败")
+            return {
+                "ikine": None,
+                "info": "获取机械臂的逆解失败"
+            }
+
     def get_joint_mode_and_speed(self, joint_id):
         """获取指定关节的模式和速度"""
         logger.info(f"获取关节 {joint_id} 的模式和速度")
@@ -890,10 +957,13 @@ class RobotArmController:
         self.serial_client.close()
     
 if __name__ == '__main__':
-    controller = RobotArmController(device="COM7")
+    controller = RobotArmController(device="/dev/ttyUSB0")
     controller.enable_reception(True)
     
-    # controller.set_joint_angle_use_time(1, 500, 2000)
+    # print(controller.get_joint_fkine(current_pose=True))
+    # print(controller.get_joint_ikine(current_pose=True))
+    
+    # controller.set_joint_angle_use_time(1, 300, 2000)
     # controller.set_joint_angle_use_time(2, 500, 2000)
     # controller.set_joint_angle_use_time(3, 500, 2000)
     # controller.set_joint_angle_use_time(4, 500, 2000)
