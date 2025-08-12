@@ -59,32 +59,37 @@ def angle_transform(angle, param, inverse=False):
 
     return new_angle
 
-def pulse2angle(pulse):
+def pulse2angle(pulse_list):
     """将脉冲宽度转换为角度"""
-    theta1 = angle_transform(pulse[0], joint1_map)
-    theta2 = angle_transform(pulse[1], joint2_map)
-    theta3 = angle_transform(pulse[2], joint3_map)
-    theta4 = angle_transform(pulse[3], joint4_map)
-    theta5 = angle_transform(pulse[4], joint5_map)
+    theta1 = angle_transform(pulse_list[0], joint1_map)
+    theta2 = angle_transform(pulse_list[1], joint2_map)
+    theta3 = angle_transform(pulse_list[2], joint3_map)
+    theta4 = angle_transform(pulse_list[3], joint4_map)
+    theta5 = angle_transform(pulse_list[4], joint5_map)
     
     return radians(theta1), radians(theta2), radians(theta3), radians(theta4), radians(theta5)
 
-def angle2pulse(angles: list, convert_int=False):
-    """将角度转换为脉冲宽度"""
+def angle2pulse(angle_list: list, convert_int=False):
+    """将多组角度转换为脉冲宽度
+
+    :param list angles: 期望角度列表
+    :param bool convert_int: 输出的角度是否转换为整数, defaults to False
+    :return _type_: _description_
+    """
     pluse = []
     
-    for angle in angles:
-        theta1 = angle_transform(degrees(angle[0]), joint1_map, True)
-        theta2 = angle_transform(degrees(angle[1]), joint2_map, True)
-        theta3 = angle_transform(degrees(angle[2]), joint3_map, True)
-        theta4 = angle_transform(degrees(angle[3]), joint4_map, True)
-        theta5 = angle_transform(degrees(angle[4]), joint5_map, True)
+    for angle in angle_list:
+        pulse_1 = angle_transform(degrees(angle[0]), joint1_map, True)
+        pulse_2 = angle_transform(degrees(angle[1]), joint2_map, inverse=False)
+        pulse_3 = angle_transform(degrees(angle[2]), joint3_map, True)
+        pulse_4 = angle_transform(degrees(angle[3]), joint4_map, inverse=False)
+        pulse_5 = angle_transform(degrees(angle[4]), joint5_map, True)
         
-        #print(theta1, theta2, theta3, theta4, theta5)
+        # print(pulse_1, pulse_2, pulse_3, pulse_4, pulse_5)
         if convert_int:
-            pluse.extend([[int(theta1), int(theta2), int(theta3), int(theta4), int(theta5)]])
+            pluse.extend([[int(pulse_1), int(pulse_2), int(pulse_3), int(pulse_4), int(pulse_5)]])
         else:
-            pluse.extend([[theta1, theta2, theta3, theta4, theta5]])
+            pluse.extend([[pulse_1, pulse_2, pulse_3, pulse_4, pulse_5]])
 
     return pluse
 
@@ -148,32 +153,39 @@ class RobotArmModule(DHRobot):
     
 if __name__ == "__main__":
     robot = RobotArmModule()
-    print(robot)
+    # print(robot)
     
     # 机械臂关节的角度
-    angle_list = [0, 0, 0, -90, 0]
-
+    angle_list = [0, -90, 0, -90, 0]
+    pulse_list = [500, 500, 500, 500, 500]
     
     
-    # 机械臂正解
-    translation_vector = robot.fkine(np.radians(angle_list))
-    x, y, z = np.round(translation_vector.t, 3)  # 平移向量
-    Rx, Py, Yz = np.round(translation_vector.rpy(order="zyx"), 3)  # 旋转角
+    # # 机械臂正解
+    # translation_vector = robot.fkine(np.radians(angle_list))
+    # x, y, z = np.round(translation_vector.t, 3)  # 平移向量
+    # Rx, Py, Yz = np.round(translation_vector.rpy(order="zyx"), 3)  # 旋转角
     
-    print("机械臂正解")
-    print(f"x: {x}, y: {y}, z: {z}")
-    print(f"Rx: {Rx}, Py: {Py}, Yz: {Yz}")
+    # print("机械臂正解")
+    # print(f"x: {x}, y: {y}, z: {z}")
+    # print(f"Rx: {Rx}, Py: {Py}, Yz: {Yz}")
     
-    # 机械臂逆解
-    R_T = SE3([x, y, z]) * rpy2tr([Rx, Py, Yz], order="zyx")
-    sol = robot.ikine_LM(R_T, joint_limits=True)
-    if sol:
-        inverse_result = np.round(np.degrees(sol.q), 6).tolist()
-        print("逆解角度：", inverse_result)
+    # # 机械臂逆解
+    # R_T = SE3([x, y, z]) * rpy2tr([Rx, Py, Yz], order="zyx")
+    # sol = robot.ikine_LM(R_T, joint_limits=True)
+    # if sol:
+    #     inverse_result = np.round(np.degrees(sol.q), 6).tolist()
+    #     print("逆解角度：", inverse_result)
     
-        # 机械臂画图
-        robot.teach(np.radians(inverse_result), block=True)
-    else:
-        print("逆解失败")
+    #     # 机械臂画图
+    #     robot.teach(np.radians(inverse_result), block=True)
+    # else:
+    #     print("逆解失败")
         
     # todo 计算角度 --> 脉冲 的换算关系
+    # print(angle2pulse(np.radians(angle_list).tolist()))
+    new_angle = np.degrees(pulse2angle(pulse_list)).tolist()
+    print("脉冲转换得到的角度", new_angle)
+    
+    new_pluse = angle2pulse([angle_list], convert_int=True)
+    print("角度转换成脉冲", new_pluse)
+    
