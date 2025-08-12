@@ -72,7 +72,7 @@ def pulse2angle(pulse_list):
 def angle2pulse(angle_list: list, convert_int=False):
     """将多组角度转换为脉冲宽度
 
-    :param list angles: 期望角度列表
+    :param list angles: 期望角度列表, 单位为弧度
     :param bool convert_int: 输出的角度是否转换为整数, defaults to False
     :return _type_: _description_
     """
@@ -80,9 +80,9 @@ def angle2pulse(angle_list: list, convert_int=False):
     
     for angle in angle_list:
         pulse_1 = angle_transform(degrees(angle[0]), joint1_map, True)
-        pulse_2 = angle_transform(degrees(angle[1]), joint2_map, inverse=False)
+        pulse_2 = angle_transform(degrees(angle[1]), joint2_map, True)
         pulse_3 = angle_transform(degrees(angle[2]), joint3_map, True)
-        pulse_4 = angle_transform(degrees(angle[3]), joint4_map, inverse=False)
+        pulse_4 = angle_transform(degrees(angle[3]), joint4_map, True)
         pulse_5 = angle_transform(degrees(angle[4]), joint5_map, True)
         
         # print(pulse_1, pulse_2, pulse_3, pulse_4, pulse_5)
@@ -156,36 +156,35 @@ if __name__ == "__main__":
     # print(robot)
     
     # 机械臂关节的角度
-    angle_list = [0, -90, 0, -90, 0]
+    new_angle = [0, -90, 0, -90, 0]
     pulse_list = [500, 500, 500, 500, 500]
     
     
-    # # 机械臂正解
-    # translation_vector = robot.fkine(np.radians(angle_list))
-    # x, y, z = np.round(translation_vector.t, 3)  # 平移向量
-    # Rx, Py, Yz = np.round(translation_vector.rpy(order="zyx"), 3)  # 旋转角
+    # 机械臂正解
+    translation_vector = robot.fkine(np.radians(new_angle))
+    x, y, z = np.round(translation_vector.t, 3)  # 平移向量
+    Rx, Py, Yz = np.round(translation_vector.rpy(order="zyx"), 3)  # 旋转角
     
-    # print("机械臂正解")
-    # print(f"x: {x}, y: {y}, z: {z}")
-    # print(f"Rx: {Rx}, Py: {Py}, Yz: {Yz}")
+    print("机械臂正解")
+    print(f"x: {x}, y: {y}, z: {z}")
+    print(f"Rx: {Rx}, Py: {Py}, Yz: {Yz}")
     
-    # # 机械臂逆解
-    # R_T = SE3([x, y, z]) * rpy2tr([Rx, Py, Yz], order="zyx")
-    # sol = robot.ikine_LM(R_T, joint_limits=True)
-    # if sol:
-    #     inverse_result = np.round(np.degrees(sol.q), 6).tolist()
-    #     print("逆解角度：", inverse_result)
+    # 机械臂逆解
+    R_T = SE3([x, y, z]) * rpy2tr([Rx, Py, Yz], order="zyx")
+    sol = robot.ikine_LM(R_T, joint_limits=True)
+    if sol:
+        inverse_result = np.round(np.degrees(sol.q), 6).tolist()
+        print("逆解角度：", inverse_result)
     
-    #     # 机械臂画图
-    #     robot.teach(np.radians(inverse_result), block=True)
-    # else:
-    #     print("逆解失败")
+        # 机械臂画图
+        robot.teach(np.radians(inverse_result), block=True)
+    else:
+        print("逆解失败")
         
-    # todo 计算角度 --> 脉冲 的换算关系
-    # print(angle2pulse(np.radians(angle_list).tolist()))
+    # 计算 角度 <--> 脉冲 的换算关系
     new_angle = np.degrees(pulse2angle(pulse_list)).tolist()
-    print("脉冲转换得到的角度", new_angle)
+    print(f"脉冲 {pulse_list} 转换得到的角度 {new_angle}")
     
-    new_pluse = angle2pulse([angle_list], convert_int=True)
-    print("角度转换成脉冲", new_pluse)
+    new_pluse = angle2pulse([np.radians(new_angle)], convert_int=True)
+    print(f"角度 {new_angle} 转换成脉冲 {new_pluse}")
     

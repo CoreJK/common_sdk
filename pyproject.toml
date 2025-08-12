@@ -26,3 +26,9 @@ tests = [
     "pytest>=8.3.5",
     "ddt>=1.7.2",
 ]
+plot = [
+    "swift-sim>=1.1.0",
+    "spatialgeometry>=1.1.0",
+    "trimesh>=4.7.3",
+    "networkx>=3.1",
+]
