@@ -2,9 +2,8 @@ import unittest
 import ddt
 import platform
 
-import serial.tools.list_ports
 from armpi_common.robot_arm_controller import RobotArmController
-
+from configparser import ConfigParser
 
 @ddt.ddt
 class ConnectTestCase(unittest.TestCase):
@@ -12,8 +11,10 @@ class ConnectTestCase(unittest.TestCase):
     
     def setUp(self):
         self.platform_version = platform.system()
-        self.robot_port : str = list(serial.tools.list_ports.comports())[0].device
-        self.baud_rate = 115200
+        self.config = ConfigParser()
+        self.config.read("tests/test_case/robot_config.ini")
+        self.robot_port : str = self.config.get("robot_config", "robot_port")
+        self.baud_rate : int = int(self.config.get("robot_config", "baud_rate"))
         self.robot_controller = RobotArmController(device=self.robot_port, baudrate=self.baud_rate)
         self.robot_controller.enable_reception(True)
     
@@ -51,6 +52,15 @@ class ConnectTestCase(unittest.TestCase):
     def test_get_joint_position(self):
         """获取指定关节的位置值"""
         pass
+    
+    def test_get_all_joint_position(self):
+        """获取所有关节的位置"""
+        recv_data = self.robot_controller.get_all_joint_position()
+        position_list = recv_data.get("position_list")
+        if position_list is None:
+            self.fail(recv_data.get("info"))
+        self.assertEqual(len(position_list), 5, "关节位置数量与预期不符")
+
     
     def tearDown(self):
         self.robot_controller.close_connection()

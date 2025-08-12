@@ -29,7 +29,7 @@ class RobotArmKinematicsTestCase(unittest.TestCase):
         self.assertEqual((Rx, Py, Yz), (-3.142, -0.0, 0.0))
     
     @ddt.data(
-        [0.195, 0.0, 0.065, 0, -0.0, 0.0]
+        [0.195, 0.0, 0.065, -3.142, -0.0, 0.0]
     )
     def test_ik(self, translation_vector: list):
         """测试机械臂的逆运动学"""

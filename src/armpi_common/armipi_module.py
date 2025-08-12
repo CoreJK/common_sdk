@@ -1,9 +1,11 @@
-from math import radians, pi, degrees
+from math import radians, degrees
 import numpy as np
 from roboticstoolbox import DHRobot, RevoluteMDH
 
 from spatialmath import SE3
 from spatialmath.base import rpy2tr
+
+# from armpi_common.utils import 
 
 '''
 Modified DH
@@ -24,23 +26,15 @@ i | α(i-1) | a(i-1) |       θ(i)      | d(i) |
 
 # 连杆长度(m)
 # 底座的高度，这里把第一个坐标系和第二个坐标的原点重合到一起了
-base_link = 0.064605
+BASE_LINK = 0.064605
 
-link1 = 0.10048
-link2 = 0.094714
+LINK1 = 0.10048
+LINK2 = 0.094714
 
 # 计算tool_link时取值为link3 + tool_link，因为把末端的坐标系原点和前一个重合到一起了
 # 这里的tool_link指实际上的夹持器长度
-link3 = 0.05071
-tool_link = 0.1126
-
-# 各关节角度限制，取决于是否碰撞以及舵机的转动范围
-# 多加0.2为了防止计算时数值的不稳定，会比设定值大一点点
-joint1 = [-120.2, 120.2]
-joint2 = [-180.2, 0.2]
-joint3 = [-120.2, 120.2]
-joint4 = [-200.2, 20.2]
-joint5 = [-120.2, 120.2]
+LINK3 = 0.05071
+TOOL_LINK = 0.1126
 
 #         舵机脉宽范围，中位值，对应的角度范围，中位值
 joint1_map = [0, 1000, 500, -120, 120, 0]
@@ -99,7 +93,7 @@ class RobotArmModule(DHRobot):
     def __init__(self):
         L1 = RevoluteMDH(
             alpha = 0,
-            d = base_link,
+            d = BASE_LINK,
             a = 0,
             offset = 0,
             qlim = (radians(-120), radians(120))
@@ -114,14 +108,14 @@ class RobotArmModule(DHRobot):
         L3 = RevoluteMDH(
             alpha = 0,
             d = 0,
-            a = link1,
+            a = LINK1,
             offset = 0,
             qlim = (radians(-120), radians(120))
         )
         L4 = RevoluteMDH(
             alpha = 0,
             d = 0,
-            a = link2,
+            a = LINK2,
             offset = 0,
             qlim = (radians(-200), radians(20))
         )
@@ -153,10 +147,10 @@ class RobotArmModule(DHRobot):
     
 if __name__ == "__main__":
     robot = RobotArmModule()
-    # print(robot)
+    print(robot)
     
     # 机械臂关节的角度
-    new_angle = [0, -90, 0, -90, 0]
+    new_angle = [0, 0, 0, 0, 0]
     pulse_list = [500, 500, 500, 500, 500]
     
     
@@ -165,7 +159,7 @@ if __name__ == "__main__":
     x, y, z = np.round(translation_vector.t, 3)  # 平移向量
     Rx, Py, Yz = np.round(translation_vector.rpy(order="zyx"), 3)  # 旋转角
     
-    print("机械臂正解")
+    print(f"机械臂正解，关节角度为 {new_angle}")
     print(f"x: {x}, y: {y}, z: {z}")
     print(f"Rx: {Rx}, Py: {Py}, Yz: {Yz}")
     
@@ -177,14 +171,14 @@ if __name__ == "__main__":
         print("逆解角度：", inverse_result)
     
         # 机械臂画图
-        robot.teach(np.radians(inverse_result), block=True)
+        # robot.teach(np.radians(inverse_result), block=True)
     else:
         print("逆解失败")
         
     # 计算 角度 <--> 脉冲 的换算关系
-    new_angle = np.degrees(pulse2angle(pulse_list)).tolist()
-    print(f"脉冲 {pulse_list} 转换得到的角度 {new_angle}")
+    # new_angle = np.degrees(pulse2angle(pulse_list)).tolist()
+    # print(f"脉冲 {pulse_list} 转换得到的角度 {new_angle}")
     
-    new_pluse = angle2pulse([np.radians(new_angle)], convert_int=True)
+    new_pluse = angle2pulse([np.radians(inverse_result)], convert_int=True)
     print(f"角度 {new_angle} 转换成脉冲 {new_pluse}")
     

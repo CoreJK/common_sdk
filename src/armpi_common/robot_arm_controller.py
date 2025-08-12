@@ -12,6 +12,11 @@ import serial
 from armpi_common.utils import calculate_checksum, split_to_bytes
 from armpi_common.cmdTable import CMD_TABLE
 from armpi_common._log import logger
+from armpi_common.armipi_module import RobotArmModule
+from armpi_common.armipi_module import angle2pulse, pulse2angle
+
+from spatialmath import SE3
+from spatialmath.base import rpy2tr
 
 
 class PacketControllerState(enum.IntEnum):
@@ -31,7 +36,8 @@ class RobotArmController:
         self.serial_client.rts = False
         self.serial_client.dtr = False
         self.__enable_recv = False  # 是否开启接收数据包功能
-
+        self.robot_arm_module = RobotArmModule()
+        
         # 数据接收相关        
         self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
         self.frame = []  # 数据包
@@ -42,7 +48,7 @@ class RobotArmController:
         self.servo_read_lock = threading.Lock()  # 舵机数据读取线程锁
         self.start_recv_task()  # 启动数据接收线程
         
-    
+
     def start_recv_task(self):
         threading.Thread(target=self.recv_task, daemon=True).start()
         time.sleep(0.1)
@@ -724,6 +730,27 @@ class RobotArmController:
                 'info': recv_data['info']
             }
     
+    def get_all_joint_position(self):
+        """获取所有关节的位置"""
+        logger.info(f"获取所有关节的位置")
+        position_list = []
+        for i in range(1, 6):
+            joint_data = self.get_joint_position(i)
+            logger.debug(f"获取关节 {i} 的位置，位置为 {joint_data['position']}")
+            if joint_data['position'] is not None:
+                position_list.append(joint_data['position'])
+            else:
+                logger.error(f"获取关节 {i} 的位置失败")
+                return {
+                    "position_list": None,
+                    "info": f"获取关节 {i} 的位置失败"
+                }
+        logger.debug(f"获取所有关节的位置成功，位置列表为 {position_list}")
+        return {
+            "position_list": position_list,
+            "info": "获取所有关节的位置成功"
+        }
+    
     def get_joint_mode_and_speed(self, joint_id):
         """获取指定关节的模式和速度"""
         logger.info(f"获取关节 {joint_id} 的模式和速度")
@@ -855,6 +882,7 @@ class RobotArmController:
                 'led_error': None,
                 'info': recv_data['info']
             }
+    
     
     def close_connection(self):
         logger.info("机械臂断开连接")
