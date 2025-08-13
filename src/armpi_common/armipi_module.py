@@ -53,7 +53,7 @@ def angle_transform(angle, param, inverse=False):
 
     return new_angle
 
-def pulse2angle(pulse_list):
+def pulse2angle(pulse_list: list):
     """将脉冲宽度转换为角度"""
     theta1 = angle_transform(pulse_list[0], joint1_map)
     theta2 = angle_transform(pulse_list[1], joint2_map)

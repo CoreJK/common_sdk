@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 def split_to_bytes(value):
     """大端转换成小端，将数值拆分为低8位和高8位，低8位在前"""
     low_byte = value & 0xFF
@@ -15,3 +17,11 @@ def get_command_info_by_id(cmd_id, cmd_table: dict):
     for cmd_name, cmd_data in cmd_table.items():
         if cmd_data[4] == cmd_id:  # 第5个元素是命令ID
             return cmd_name  # 返回命令名
+        
+
+def is_flat(seq):
+    """判断列表是否为平铺的，即列表中的元素不是列表"""
+    return all(
+        not (isinstance(x, Sequence) and not isinstance(x, (str, bytes, bytearray)))
+        for x in seq
+    )
