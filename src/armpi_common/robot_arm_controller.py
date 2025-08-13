@@ -455,7 +455,85 @@ class RobotArmController:
         return {
             "status": True,
             "info": "设置关节运动成功"
-        }   
+        }
+
+    def move_between_coordinates(self, start_coordinate_list, end_coordinate_list, duration_ms=2000, steps=60, mask=None, blocking=True):
+        """在两个末端位姿坐标之间平滑过渡
+
+        :param list[float] start_coordinate_list: 起点位姿 [x,y,z,roll,pitch,yaw]，单位 m / rad
+        :param list[float] end_coordinate_list: 终点位姿 [x,y,z,roll,pitch,yaw]，单位 m / rad
+        :param int duration_ms: 总时长（毫秒）
+        :param int steps: 轨迹离散步数
+        :param list[int] mask: 逆解掩码，长度6，默认仅约束 [x,y,z,yaw] -> [1,1,1,0,0,1]
+        :param bool blocking: 是否阻塞等待执行（按步 sleep）
+        """
+        logger.info("在两个末端位姿之间执行平滑过渡")
+        # 校验输入
+        for name, coord in (("start", start_coordinate_list), ("end", end_coordinate_list)):
+            if not is_flat(coord):
+                logger.error(f"{name} 坐标列表不能嵌套, 只能是一维列表")
+                return {"status": False, "info": f"{name} 坐标列表不能嵌套, 只能是一维列表"}
+            if len(coord) != 6:
+                logger.error(f"{name} 坐标列表长度为 {len(coord)}，预期为 6")
+                return {"status": False, "info": f"{name} 坐标列表长度为 {len(coord)}，预期为 6"}
+            if not all(isinstance(x, (int, float)) for x in coord):
+                logger.error(f"{name} 坐标列表中的元素必须是整数或浮点数")
+                return {"status": False, "info": f"{name} 坐标列表中的元素必须是整数或浮点数"}
+
+        if mask is None:
+            mask = [1, 1, 1, 0, 0, 1]
+        if len(mask) != 6:
+            return {"status": False, "info": "mask 长度需为 6"}
+        if steps <= 0:
+            return {"status": False, "info": "steps 必须 > 0"}
+        if duration_ms < 0:
+            return {"status": False, "info": "duration_ms 不能为负"}
+
+        # 时间分配
+        step_time_ms = max(1, int(round(duration_ms / steps)))
+
+        # 拆包起止位姿
+        sx, sy, sz, sR, sP, sY = start_coordinate_list
+        ex, ey, ez, eR, eP, eY = end_coordinate_list
+
+        # 先用起点作为初值求出初始关节解，提升后续迭代稳定性
+        T_start = SE3([sx, sy, sz]) * rpy2tr([sR, sP, sY], order="zyx")
+        sol0 = self.robot_arm_module.ikine_LM(T_start, joint_limits=True)
+        if not sol0.success:
+            logger.error("起点逆解失败，无法开始轨迹")
+            return {"status": False, "info": "起点逆解失败"}
+        qk = sol0.q
+
+        steps_done = 0
+        for k in range(1, steps + 1):
+            t = k / float(steps)
+            # 线性插值位置与姿态
+            x = sx + (ex - sx) * t
+            y = sy + (ey - sy) * t
+            z = sz + (ez - sz) * t
+            Rr = sR + (eR - sR) * t
+            Rp = sP + (eP - sP) * t
+            Ry = sY + (eY - sY) * t
+
+            T_goal = SE3([x, y, z]) * rpy2tr([Rr, Rp, Ry], order="zyx")
+            sol = self.robot_arm_module.ikine_LM(T_goal, q0=qk, mask=mask, joint_limits=True)
+            if not sol.success:
+                logger.error(f"第 {k}/{steps} 步逆解失败，提前结束")
+                break
+            qk = sol.q
+
+            # 角度(弧度) -> 脉冲，并下发本步目标
+            joint_pulse = angle2pulse([qk.tolist()], convert_int=True)[0]
+            for joint_id, pulse in enumerate(joint_pulse, start=1):
+                self.set_joint_angle_use_time(joint_id, pulse, step_time_ms)
+
+            steps_done += 1
+            if blocking:
+                time.sleep(step_time_ms / 1000.0)
+
+        ok = steps_done == steps
+        info = "轨迹完成" if ok else f"仅完成 {steps_done}/{steps} 步"
+        return {"status": ok, "steps": steps_done, "info": info}
         
     def set_joint_emergency_stop(self, joint_id):
         """指定关节紧急停止运动"""
@@ -1052,8 +1130,8 @@ if __name__ == '__main__':
     controller = RobotArmController(device="/dev/ttyUSB0")
     controller.enable_reception(True)
     
-    # logger.debug(controller.get_joint_fkine([500, 500, 500, 500, 500], current_pose=False))
-    # logger.debug(controller.get_joint_ikine([0.0, -0.0, 0.259799, 0.0, -0.0, -3.141593], current_pose=False))
+    # logger.debug(controller.get_joint_fkine([500, 500, 500, 500, 500], current_pose=True))
+    # logger.debug(controller.get_joint_ikine([0.0, -0.0, 0.259799, 0.0, -0.0, -3.141593], current_pose=True))
     # [499, 498, 502, 499, 498]
     # [306, 498, 502, 499, 498]
     
@@ -1063,8 +1141,12 @@ if __name__ == '__main__':
     # logger.info(controller.get_joint_fkine(current_pose=True))
     
     # logger.info(controller.set_joint_move_with_coordinate([0.00164, -0.001791, 0.259782, 8.8e-05, -0.020944, 2.308022], move_type=0, move_time=2000))
-    logger.info(controller.set_joint_move_with_coordinate([0.002428, -6.1e-05, 0.259782, 0.000175, -0.020943, 3.10808], move_type=1, move_time=2000))
-    controller.set_joint_move_start()
+    # logger.info(controller.set_joint_move_with_coordinate([0.002428, -6.1e-05, 0.259782, 0.000175, -0.020943, 3.10808], move_type=0, move_time=2000))
+    
+    position_A = [0.002428, -6.1e-05, 0.259782, 0.000175, -0.020943, 3.10808]
+    position_B = [0.00164, -0.001791, 0.259782, 8.8e-05, -0.020944, 2.308022]
+    controller.move_between_coordinates(position_B, position_A, duration_ms=2000, steps=60, mask=None, blocking=True)
+    
     # controller.set_joint_angle_use_time(2, 500, 2000)
     # controller.set_joint_angle_use_time(3, 500, 2000)
     # controller.set_joint_angle_use_time(4, 500, 2000)
