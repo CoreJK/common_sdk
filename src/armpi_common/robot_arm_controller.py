@@ -481,7 +481,7 @@ class RobotArmController:
                 return {"status": False, "info": f"{name} 坐标列表中的元素必须是整数或浮点数"}
 
         if mask is None:
-            mask = [1, 1, 1, 0, 0, 1]
+            mask = [1, 1, 1, 1, 1, 0]
         if len(mask) != 6:
             return {"status": False, "info": "mask 长度需为 6"}
         if steps <= 0:
@@ -928,8 +928,8 @@ class RobotArmController:
             }
         
         translation_vector = self.robot_arm_module.fkine(position_list)
-        x, y, z = np.round(translation_vector.t, 6)  # 平移向量
-        Rx, Py, Yz = np.round(translation_vector.rpy(order="zyx"), 6) # 旋转角
+        x, y, z = translation_vector.t  # 平移向量
+        Rx, Py, Yz = translation_vector.rpy(order="zyx") # 旋转角
         
         return {
             "fkine": [x, y, z, Rx, Py, Yz],
@@ -1130,7 +1130,8 @@ if __name__ == '__main__':
     controller = RobotArmController(device="/dev/ttyUSB0")
     controller.enable_reception(True)
     
-    # logger.debug(controller.get_joint_fkine([500, 500, 500, 500, 500], current_pose=True))
+    current_pose = controller.get_joint_fkine(current_pose=True).get("fkine")
+    logger.info(f"机械臂当前 pose: {current_pose}")
     # logger.debug(controller.get_joint_ikine([0.0, -0.0, 0.259799, 0.0, -0.0, -3.141593], current_pose=True))
     # [499, 498, 502, 499, 498]
     # [306, 498, 502, 499, 498]
@@ -1140,13 +1141,17 @@ if __name__ == '__main__':
     # time.sleep(2)
     # logger.info(controller.get_joint_fkine(current_pose=True))
     
-    # logger.info(controller.set_joint_move_with_coordinate([0.00164, -0.001791, 0.259782, 8.8e-05, -0.020944, 2.308022], move_type=0, move_time=2000))
-    # logger.info(controller.set_joint_move_with_coordinate([0.002428, -6.1e-05, 0.259782, 0.000175, -0.020943, 3.10808], move_type=0, move_time=2000))
+    # pose_b = [0.11855860931202489, -0.00347731659031457, 0.21505940094612014, 1.2262157409165864, -0.7071826799390757, 1.7705563538323623]
+    # home_pose = [0.0016584400011821232, -5.559566964662987e-05, 0.2597902355986266, 0.00010528009023049985, -0.01256592961556895, 3.0997040900621227]
     
-    position_A = [0.002428, -6.1e-05, 0.259782, 0.000175, -0.020943, 3.10808]
-    position_B = [0.00164, -0.001791, 0.259782, 8.8e-05, -0.020944, 2.308022]
-    controller.move_between_coordinates(position_B, position_A, duration_ms=2000, steps=60, mask=None, blocking=True)
+    # logger.info(controller.set_joint_move_with_coordinate(home_pose, move_type=0, move_time=5000))
+    # logger.info(controller.set_joint_move_with_coordinate(pose_b, move_type=0, move_time=1000))
     
+    # controller.move_between_coordinates(current_pose, home_pose, duration_ms=2000, steps=10, mask=[1, 1, 1, 1, 1, 0], blocking=True)
+    # controller.set_joint_angle_use_time(6, 300, 1000)
+    # time.sleep(2)
+    # controller.set_joint_angle_use_time(6, 500, 1000)
+    # controller.set_joint_angle_use_time(1, 500, 2000)
     # controller.set_joint_angle_use_time(2, 500, 2000)
     # controller.set_joint_angle_use_time(3, 500, 2000)
     # controller.set_joint_angle_use_time(4, 500, 2000)
