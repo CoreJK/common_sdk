@@ -20,7 +20,7 @@ import numpy as np
 from spatialmath import SE3
 from spatialmath.base import rpy2tr
 
-set_stream_level("INFO")
+set_stream_level("DEBUG")
 
 class PacketControllerState(enum.IntEnum):
     PACKET_CONTROLLER_STATE_STARTBYTE1 = 0
@@ -1152,7 +1152,7 @@ if __name__ == '__main__':
     # time.sleep(2)
     # controller.set_joint_angle_use_time(6, 500, 1000)
     # controller.set_joint_angle_use_time(1, 500, 2000)
-    # controller.set_joint_angle_use_time(2, 500, 2000)
+    # controller.set_joint_angle_use_time(2, 200, 2000)
     # controller.set_joint_angle_use_time(3, 500, 2000)
     # controller.set_joint_angle_use_time(4, 500, 2000)
     # controller.set_joint_angle_use_time(5, 500, 2000)

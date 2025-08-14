@@ -12,7 +12,7 @@ class ConnectTestCase(unittest.TestCase):
     def setUp(self):
         self.platform_version = platform.system()
         self.config = ConfigParser()
-        self.config.read("tests/test_case/robot_config.ini")
+        self.config.read("robot_config.ini")
         self.robot_port : str = self.config.get("robot_config", "robot_port")
         self.baud_rate : int = int(self.config.get("robot_config", "baud_rate"))
         self.robot_controller = RobotArmController(device=self.robot_port, baudrate=self.baud_rate)
@@ -33,17 +33,29 @@ class ConnectTestCase(unittest.TestCase):
         current_joint_id = recv_data.get("current_id")
         self.assertEqual(current_joint_id, ID, "ID 编号与预期不符")
     
-    def test_get_joint_vin_limit(self):
+    @ddt.data(1,2,3,4,5,6)
+    def test_get_joint_vin_limit(self, ID):
         """获取指定关节的电压限制"""
-        pass
+        recv_data = self.robot_controller.get_joint_vin_limit(ID)
+        vin_min = recv_data.get("vin_limit_low")
+        vin_max = recv_data.get("vin_limit_high")
+        self.assertEqual(vin_min, 4500, "电压限制与预期不符")
+        self.assertEqual(vin_max, 14000, "电压限制与预期不符")
     
-    def test_get_joint_temp_max_limit(self):
+    @ddt.data(1,2,3,4,5,6)
+    def test_get_joint_temp_max_limit(self, ID):
         """获取指定关节的温度限制"""
-        pass
+        recv_data = self.robot_controller.get_joint_temp_max_limit(ID)
+        temp_max_limit = recv_data.get("temp_max_limit")
+        self.assertEqual(temp_max_limit, 85, "温度限制与预期不符")
     
-    def test_get_joint_temp(self):
+    @ddt.data(1,2,3,4,5,6)
+    def test_get_joint_temp(self, ID):
         """获取关节的当前温度"""
-        pass
+        recv_data = self.robot_controller.get_joint_temp(ID)
+        current_joint_temp = recv_data.get("temp")
+        self.assertIsInstance(current_joint_temp, int, "温度类型与预期不符")
+        
     
     def test_get_joint_input_voltage(self):
         """获取指定关节的当前输入电压"""
