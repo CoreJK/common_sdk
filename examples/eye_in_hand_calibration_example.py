@@ -36,6 +36,21 @@ from src.armpi_common._log import logger, set_stream_level
 set_stream_level("INFO")
 
 
+def setup_opencv_windows():
+    """
+    设置OpenCV窗口布局，避免窗口重叠遮挡
+    """
+    # 设置OpenCV窗口显示属性
+    cv2.namedWindow("Hand-Eye Calibration Preview", cv2.WINDOW_NORMAL)
+    cv2.moveWindow("Hand-Eye Calibration Preview", 50, 50)
+    cv2.resizeWindow("Hand-Eye Calibration Preview", 600, 450)
+    
+    print("💡 窗口布局提示:")
+    print("   - 主预览窗口: 屏幕左侧")
+    print("   - 采集确认窗口: 屏幕右侧(临时显示)")
+    print("   - 如仍有遮挡，可手动拖动窗口位置")
+
+
 def step1_camera_calibration(controller: RobotArmController, 
                            camera_source: int = 0) -> dict:
     """
@@ -189,6 +204,9 @@ def manual_hand_eye_calibration(controller: RobotArmController,
     if not cap.isOpened():
         return {"status": False, "info": f"无法打开相机 {camera_source}"}
     
+    # 设置窗口布局
+    setup_opencv_windows()
+    
     # 标定板参数
     board_size = (6, 4)  # 6x4角点
     square_size = 0.020  # 20mm
@@ -232,6 +250,9 @@ def manual_hand_eye_calibration(controller: RobotArmController,
                     
                     cv2.putText(frame, f"Sample: {sample_count}", 
                                (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    cv2.putText(frame, "Press 'q' to exit preview", 
+                               (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 0), 1)
+                    
                     cv2.imshow("Hand-Eye Calibration Preview", frame)
                     
                     if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -288,11 +309,24 @@ def manual_hand_eye_calibration(controller: RobotArmController,
                     sample_count += 1
                     print(f"✅ 位姿 {sample_count} 数据采集成功")
                     
-                    # 显示检测结果
+                    # 显示检测结果 - 避免遮挡主窗口
                     preview_frame = frame.copy()
                     cv2.drawChessboardCorners(preview_frame, board_size, corners, True)
-                    cv2.imshow("Captured Sample", preview_frame)
-                    cv2.waitKey(1000)  # 显示1秒
+                    
+                    # 添加成功采集的提示信息
+                    cv2.putText(preview_frame, f"Sample {sample_count} Captured!", 
+                               (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+                    cv2.putText(preview_frame, "Position confirmed - pose saved", 
+                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    
+                    # 设置窗口位置避免遮挡
+                    window_name = f"Captured Sample {sample_count}"
+                    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+                    cv2.moveWindow(window_name, 700, 50)  # 移动到右侧
+                    cv2.resizeWindow(window_name, 400, 300)  # 调整为较小尺寸
+                    cv2.imshow(window_name, preview_frame)
+                    cv2.waitKey(1500)  # 显示1.5秒
+                    cv2.destroyWindow(window_name)  # 关闭避免累积
                     
                 else:
                     print("❌ 无法检测到标定板，请调整位姿后重试")
@@ -331,6 +365,143 @@ def manual_hand_eye_calibration(controller: RobotArmController,
         
     except Exception as e:
         return {"status": False, "info": f"标定计算失败: {e}"}
+
+
+def diagnose_calibration_failure(controller: RobotArmController, 
+                               camera_source: int = 0) -> dict:
+    """
+    诊断手眼标定失败的原因
+    """
+    print("\n" + "🔍" * 60)
+    print("手眼标定失败诊断")
+    print("🔍" * 60)
+    
+    diagnosis_results = {
+        "motor_status": "unknown",
+        "camera_status": "unknown", 
+        "workspace_status": "unknown",
+        "board_detection": "unknown",
+        "recommendations": []
+    }
+    
+    # 1. 检查电机状态
+    print("1️⃣ 检查电机使能状态...")
+    motor_status = controller.get_all_joints_load_status()
+    if motor_status['status']:
+        enabled_joints = [j for j, s in motor_status['joint_status'].items() if s == 1]
+        disabled_joints = [j for j, s in motor_status['joint_status'].items() if s == 0]
+        
+        if len(enabled_joints) >= 5:  # 至少需要5个关节使能
+            diagnosis_results["motor_status"] = "good"
+            print(f"   ✅ 电机状态良好: 使能{enabled_joints}, 未使能{disabled_joints}")
+        else:
+            diagnosis_results["motor_status"] = "failed"
+            print(f"   ❌ 电机使能不足: 仅{len(enabled_joints)}个关节使能，需要至少5个")
+            diagnosis_results["recommendations"].append("启用所有必要的电机关节")
+    else:
+        diagnosis_results["motor_status"] = "failed"
+        print(f"   ❌ 无法获取电机状态: {motor_status['info']}")
+        
+    # 2. 检查相机连接
+    print("2️⃣ 检查相机连接...")
+    try:
+        cap = cv2.VideoCapture(camera_source)
+        if cap.isOpened():
+            ret, frame = cap.read()
+            if ret and frame is not None:
+                diagnosis_results["camera_status"] = "good"
+                print(f"   ✅ 相机连接正常，分辨率: {frame.shape[1]}x{frame.shape[0]}")
+            else:
+                diagnosis_results["camera_status"] = "failed"
+                print("   ❌ 相机无法获取图像")
+                diagnosis_results["recommendations"].append("检查相机连接和权限")
+        else:
+            diagnosis_results["camera_status"] = "failed"
+            print(f"   ❌ 无法打开相机设备{camera_source}")
+            diagnosis_results["recommendations"].append("确认相机设备ID是否正确")
+        cap.release()
+    except Exception as e:
+        diagnosis_results["camera_status"] = "failed"
+        print(f"   ❌ 相机检查异常: {e}")
+    
+    # 3. 检查当前位姿和工作空间
+    print("3️⃣ 检查机械臂工作空间...")
+    try:
+        current_pose_result = controller.get_joint_fkine(current_pose=True)
+        if current_pose_result['status']:
+            current_pose = current_pose_result['fkine']
+            x, y, z = current_pose[:3]
+            
+            # 检查是否在合理的工作空间内
+            workspace_center = [0.20, 0.0, 0.15]
+            distance = ((x - workspace_center[0])**2 + 
+                       (y - workspace_center[1])**2 + 
+                       (z - workspace_center[2])**2)**0.5
+            
+            if distance < 0.15:  # 15cm范围内
+                diagnosis_results["workspace_status"] = "good"
+                print(f"   ✅ 当前位姿正常: [{x:.3f}, {y:.3f}, {z:.3f}]")
+            else:
+                diagnosis_results["workspace_status"] = "warning"
+                print(f"   ⚠️  当前位姿偏远: [{x:.3f}, {y:.3f}, {z:.3f}]")
+                diagnosis_results["recommendations"].append("将机械臂移动到工作空间中心附近")
+        else:
+            diagnosis_results["workspace_status"] = "failed"
+            print(f"   ❌ 无法获取当前位姿: {current_pose_result['info']}")
+    except Exception as e:
+        print(f"   ❌ 工作空间检查异常: {e}")
+    
+    # 4. 检查标定板检测
+    print("4️⃣ 检查标定板检测...")
+    try:
+        cap = cv2.VideoCapture(camera_source)
+        if cap.isOpened():
+            ret, frame = cap.read()
+            if ret:
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                board_size = (6, 4)  # 6x4角点
+                ret_board, corners = cv2.findChessboardCorners(gray, board_size, None)
+                
+                if ret_board:
+                    diagnosis_results["board_detection"] = "good"
+                    print(f"   ✅ 检测到标定板，角点数量: {len(corners)}")
+                else:
+                    diagnosis_results["board_detection"] = "failed"
+                    print("   ❌ 未检测到标定板")
+                    diagnosis_results["recommendations"].extend([
+                        "检查标定板是否在相机视野内",
+                        "确保标定板角点清晰可见",
+                        "改善光照条件，避免反光和阴影"
+                    ])
+        cap.release()
+    except Exception as e:
+        print(f"   ❌ 标定板检测异常: {e}")
+    
+    # 输出诊断总结
+    print("\n" + "📋" * 60)
+    print("诊断总结")
+    print("📋" * 60)
+    
+    failed_items = []
+    if diagnosis_results["motor_status"] == "failed":
+        failed_items.append("电机使能")
+    if diagnosis_results["camera_status"] == "failed":
+        failed_items.append("相机连接")
+    if diagnosis_results["workspace_status"] == "failed":
+        failed_items.append("工作空间")
+    if diagnosis_results["board_detection"] == "failed":
+        failed_items.append("标定板检测")
+    
+    if failed_items:
+        print(f"❌ 发现问题: {', '.join(failed_items)}")
+        print("\n🛠️ 建议解决方案:")
+        for i, rec in enumerate(diagnosis_results["recommendations"], 1):
+            print(f"   {i}. {rec}")
+    else:
+        print("✅ 基础条件检查通过，问题可能在标定流程中")
+        print("建议：检查工作空间参数，增加位姿变化幅度")
+    
+    return diagnosis_results
 
 
 def step2_hand_eye_calibration(controller: RobotArmController,
@@ -403,6 +574,7 @@ def step2_hand_eye_calibration(controller: RobotArmController,
     if calibration_mode == "automatic":
         # 自动标定模式
         print("开始自动采集标定数据...")
+        setup_opencv_windows()  # 设置窗口布局
         
         # 使用从工作空间分析得出的优化参数
         hand_eye_result = controller.perform_hand_eye_calibration(
@@ -590,7 +762,14 @@ def main():
             camera_source
         )
         if hand_eye_result is None:
-            print("手眼标定失败，无法继续")
+            print("手眼标定失败，正在进行诊断...")
+            # 运行诊断程序
+            diagnosis = diagnose_calibration_failure(controller, camera_source)
+            
+            # 询问是否重试
+            retry_confirm = input("\n是否根据诊断建议进行修复后重试? (y/N): ").strip().lower()
+            if retry_confirm == 'y':
+                print("请根据上述建议进行修复，然后重新运行程序")
             return
         
         # 步骤3: 标定验证
@@ -667,11 +846,17 @@ def quick_demo():
                     print(f"当前相机位姿: {camera_pose['camera_pose']}")
                 else:
                     print(f"计算相机位姿失败: {camera_pose['info']}")
+                    print("可能的原因：手眼标定数据损坏或不完整")
             else:
                 print(f"加载手眼标定失败: {load_result['info']}")
         else:
             print(f"标定文件不存在: {calibration_file}")
             print("请先运行完整标定流程")
+            
+            # 如果没有标定文件，提供诊断选项
+            run_diagnosis = input("是否运行系统诊断检查基础配置? (y/N): ").strip().lower()
+            if run_diagnosis == 'y':
+                diagnose_calibration_failure(controller, 0)
         
         controller.close_connection()
         
