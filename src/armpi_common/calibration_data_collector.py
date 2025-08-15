@@ -5,7 +5,7 @@ import cv2
 import numpy as np
 import time
 import threading
-from typing import List, Dict, Optional, Callable, Tuple
+from typing import List, Dict, Optional, Callable, Tuple, Union
 from spatialmath import SE3
 import json
 from datetime import datetime
@@ -14,13 +14,18 @@ import os
 from armpi_common._log import logger
 from armpi_common.robot_arm_controller import RobotArmController
 from armpi_common.hand_eye_calibration import HandEyeCalibration
+from armpi_common.eye_to_hand_calibration import EyeToHandCalibration
 
 
 class CalibrationDataCollector:
     """
     标定数据收集器
     
-    该类负责自动化收集手眼标定所需的数据，包括：
+    该类负责自动化收集手眼标定所需的数据，支持两种标定模式：
+    1. 眼在手上 (Eye-in-Hand): 相机固定在机械臂末端，标定板固定在外部
+    2. 眼在手外 (Eye-to-Hand): 相机固定在外部，标定板固定在机械臂末端
+    
+    功能包括：
     1. 控制机械臂移动到不同位姿
     2. 采集相机图像
     3. 检测标定板
@@ -30,7 +35,9 @@ class CalibrationDataCollector:
     def __init__(self, 
                  robot_controller: RobotArmController,
                  camera_source: int = 0,
-                 save_directory: str = "./calibration_data"):
+                 save_directory: str = "./calibration_data",
+                 calibration_type: str = "eye_in_hand",
+                 camera_pose: List[float] = None):
         """
         初始化标定数据收集器
         
@@ -38,10 +45,20 @@ class CalibrationDataCollector:
             robot_controller: 机械臂控制器
             camera_source: 相机设备ID或视频文件路径
             save_directory: 数据保存目录
+            calibration_type: 标定类型 ("eye_in_hand" 或 "eye_to_hand")
+            camera_pose: 眼在手外模式下相机的固定位姿 [x,y,z,rx,ry,rz] (可选)
         """
         self.robot_controller = robot_controller
         self.camera_source = camera_source
         self.save_directory = save_directory
+        
+        # 标定类型验证
+        if calibration_type not in ["eye_in_hand", "eye_to_hand"]:
+            raise ValueError("calibration_type 必须是 'eye_in_hand' 或 'eye_to_hand'")
+        self.calibration_type = calibration_type
+        
+        # 相机位姿（用于眼在手外模式）
+        self.camera_pose = camera_pose
         
         # 相机对象
         self.cap = None
@@ -61,7 +78,7 @@ class CalibrationDataCollector:
         # 创建保存目录
         os.makedirs(save_directory, exist_ok=True)
         
-        logger.info(f"标定数据收集器初始化完成，保存目录: {save_directory}")
+        logger.info(f"标定数据收集器初始化完成，模式: {calibration_type}，保存目录: {save_directory}")
     
     def initialize_camera(self) -> bool:
         """
@@ -127,26 +144,86 @@ class CalibrationDataCollector:
         """
         poses = []
         
-        # 基础姿态（相机大致朝下）
-        base_orientation = [0.0, 0.0, -np.pi]
+        if self.calibration_type == "eye_in_hand":
+            # 眼在手上：相机朝下看固定的标定板
+            base_orientation = [0.0, 0.0, -np.pi]
+            
+            for i in range(num_poses):
+                # 在圆形区域内随机生成位置
+                angle = 2 * np.pi * i / num_poses + np.random.uniform(-0.2, 0.2)
+                radius = workspace_radius * np.random.uniform(0.3, 1.0)
+                
+                x = workspace_center[0] + radius * np.cos(angle)
+                y = workspace_center[1] + radius * np.sin(angle)
+                z = workspace_center[2] + np.random.uniform(-height_variation, height_variation)
+                
+                # 随机姿态变化
+                rx = base_orientation[0] + np.random.uniform(-orientation_variation, orientation_variation)
+                ry = base_orientation[1] + np.random.uniform(-orientation_variation, orientation_variation)
+                rz = base_orientation[2] + np.random.uniform(-orientation_variation, orientation_variation)
+                
+                poses.append([x, y, z, rx, ry, rz])
+                
+        elif self.calibration_type == "eye_to_hand":
+            # 眼在手外：标定板在机械臂末端，需要面向固定的相机
+            if self.camera_pose is not None:
+                # 已知相机位姿的情况，生成面向相机的位姿
+                cam_x, cam_y, cam_z = self.camera_pose[:3]
+                camera_position = np.array([cam_x, cam_y, cam_z])
+            else:
+                # 默认相机位置（假设相机在机械臂前方上方）
+                camera_position = np.array([0.0, -0.3, 0.4])
+            
+            for i in range(num_poses):
+                # 在球形区域内生成位置，确保标定板能被相机看到
+                # 使用球坐标系生成均匀分布的位置
+                phi = np.random.uniform(0, 2 * np.pi)  # 方位角
+                theta = np.random.uniform(np.pi/6, np.pi/3)  # 仰角（避免过于垂直）
+                radius = workspace_radius * np.random.uniform(0.5, 1.0)
+                
+                # 相对于工作空间中心的偏移
+                x_offset = radius * np.sin(theta) * np.cos(phi)
+                y_offset = radius * np.sin(theta) * np.sin(phi)
+                z_offset = radius * np.cos(theta) + np.random.uniform(-height_variation, height_variation)
+                
+                x = workspace_center[0] + x_offset
+                y = workspace_center[1] + y_offset
+                z = workspace_center[2] + z_offset
+                
+                # 计算从标定板位置到相机的方向向量
+                board_position = np.array([x, y, z])
+                direction_to_camera = camera_position - board_position
+                direction_to_camera = direction_to_camera / np.linalg.norm(direction_to_camera)
+                
+                # 计算旋转使标定板法向量指向相机
+                # 标定板默认法向量为 [0, 0, 1] (z轴正方向)
+                z_axis = direction_to_camera
+                
+                # 生成合理的x轴（避免与z轴平行）
+                if abs(z_axis[2]) < 0.9:
+                    x_axis = np.cross([0, 0, 1], z_axis)
+                else:
+                    x_axis = np.cross([1, 0, 0], z_axis)
+                x_axis = x_axis / np.linalg.norm(x_axis)
+                
+                # y轴通过叉积得到
+                y_axis = np.cross(z_axis, x_axis)
+                
+                # 构造旋转矩阵
+                rotation_matrix = np.column_stack([x_axis, y_axis, z_axis])
+                
+                # 转换为欧拉角 (ZYX顺序)
+                from spatialmath.base import tr2rpy
+                rpy = tr2rpy(rotation_matrix, order='zyx')
+                
+                # 添加随机姿态变化
+                rx = rpy[0] + np.random.uniform(-orientation_variation, orientation_variation)
+                ry = rpy[1] + np.random.uniform(-orientation_variation, orientation_variation)
+                rz = rpy[2] + np.random.uniform(-orientation_variation, orientation_variation)
+                
+                poses.append([x, y, z, rx, ry, rz])
         
-        for i in range(num_poses):
-            # 在圆形区域内随机生成位置
-            angle = 2 * np.pi * i / num_poses + np.random.uniform(-0.2, 0.2)
-            radius = workspace_radius * np.random.uniform(0.3, 1.0)
-            
-            x = workspace_center[0] + radius * np.cos(angle)
-            y = workspace_center[1] + radius * np.sin(angle)
-            z = workspace_center[2] + np.random.uniform(-height_variation, height_variation)
-            
-            # 随机姿态变化
-            rx = base_orientation[0] + np.random.uniform(-orientation_variation, orientation_variation)
-            ry = base_orientation[1] + np.random.uniform(-orientation_variation, orientation_variation)
-            rz = base_orientation[2] + np.random.uniform(-orientation_variation, orientation_variation)
-            
-            poses.append([x, y, z, rx, ry, rz])
-        
-        logger.info(f"生成了 {len(poses)} 个标定位姿")
+        logger.info(f"生成了 {len(poses)} 个{self.calibration_type}标定位姿")
         return poses
     
     def move_to_pose_safely(self, 
@@ -419,12 +496,12 @@ class CalibrationDataCollector:
             logger.error(f"加载采集数据失败: {e}")
             return False
     
-    def add_data_to_calibrator(self, calibrator: HandEyeCalibration) -> int:
+    def add_data_to_calibrator(self, calibrator: Union[HandEyeCalibration, EyeToHandCalibration]) -> int:
         """
         将采集的数据添加到标定器
         
         Args:
-            calibrator: 手眼标定器
+            calibrator: 手眼标定器或眼在手外标定器
             
         Returns:
             成功添加的样本数量
@@ -433,6 +510,14 @@ class CalibrationDataCollector:
         
         if not self.collected_poses or not self.collected_images:
             logger.warning("没有可用的采集数据")
+            return 0
+        
+        # 验证标定器类型与收集器模式匹配
+        if self.calibration_type == "eye_in_hand" and not isinstance(calibrator, HandEyeCalibration):
+            logger.error("眼在手上模式需要使用 HandEyeCalibration")
+            return 0
+        elif self.calibration_type == "eye_to_hand" and not isinstance(calibrator, EyeToHandCalibration):
+            logger.error("眼在手外模式需要使用 EyeToHandCalibration")
             return 0
         
         successful_additions = 0
@@ -444,7 +529,7 @@ class CalibrationDataCollector:
             else:
                 logger.warning(f"样本 {i+1} 添加到标定器失败")
         
-        logger.info(f"成功添加 {successful_additions}/{len(self.collected_poses)} 个样本到标定器")
+        logger.info(f"成功添加 {successful_additions}/{len(self.collected_poses)} 个样本到{self.calibration_type}标定器")
         return successful_additions
     
     def quick_collect_and_calibrate(self, 

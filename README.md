@@ -72,11 +72,13 @@ tool_link = 0.1126
 
 - 🔥 **视觉系统** (**新增**)
   - 眼在手上（Eye-in-Hand）标定
+  - 眼在手外（Eye-to-Hand）标定
   - 相机内参标定
   - 手眼变换矩阵计算
   - 多种标定算法支持（Tsai、Park、Horaud等）
   - 自动化数据采集
   - 标定精度验证
+  - **标定安全保护**：自动电机使能管理
 
 - 🤖 **运动学系统**
   - 正向运动学 (Forward Kinematics)
@@ -261,16 +263,97 @@ if camera_result['status']:
                 print(f"相机位姿: {pose}")
 ```
 
+### 眼在手外标定
+
+```python
+# 眼在手外配置：相机固定在外部，标定板在机械臂末端
+
+# 1. 相机标定（同上）
+camera_result = controller.perform_camera_calibration(
+    camera_source=2,           # 外部固定相机
+    num_images=20,
+    board_size=(9, 6),
+    square_size=0.025
+)
+
+if camera_result['status']:
+    print("相机标定成功")
+    
+    # 2. 眼在手外标定：获取固定相机与机械臂基座的变换关系
+    camera_matrix = np.array(camera_result['camera_matrix'])
+    distortion_coeffs = np.array(camera_result['distortion_coeffs'])
+    
+    # 初始化眼在手外标定系统
+    init_result = controller.initialize_eye_to_hand_calibration(
+        camera_matrix=camera_matrix,
+        distortion_coeffs=distortion_coeffs,
+        camera_pose=[0.0, -0.3, 0.4, 0.0, 0.0, 0.0]  # 相机位置（可选）
+    )
+    
+    if init_result['status']:
+        # 执行眼在手外标定
+        eye_to_hand_result = controller.perform_eye_to_hand_calibration(
+            num_poses=15,              # 采集位姿数量
+            calibration_method='tsai'   # 标定算法
+        )
+        
+        if eye_to_hand_result['status']:
+            print("眼在手外标定成功")
+            print(f"标定误差: {eye_to_hand_result['calibration_error']:.6f}")
+            
+            # 3. 使用标定结果
+            # 获取固定相机的位姿
+            camera_pose = controller.get_fixed_camera_pose()
+            if camera_pose['status']:
+                pose = camera_pose['camera_pose']
+                print(f"固定相机位姿: {pose}")
+            
+            # 获取标定板的当前位姿
+            board_pose = controller.get_board_pose_from_robot_pose()
+            if board_pose['status']:
+                pose = board_pose['board_pose']
+                print(f"标定板位姿: {pose}")
+```
+
+### 电机使能管理（标定安全保护）
+
+```python
+# 标定前安全措施：检查和卸载电机使能
+safety_status = controller.check_motors_safety_status()
+print(f"当前安全模式: {safety_status['is_safe_mode']}")
+
+# 卸载所有电机使能（标定前必须）
+# 0 = 卸载掉电（无力矩输出），1 = 装载电机（有力矩输出）
+unload_result = controller.unload_all_motors(include_gripper=False)
+if unload_result['status']:
+    print("✅ 电机已安全卸载掉电，可以进行标定")
+
+# 执行标定操作...
+# （标定过程中电机不会意外启动，确保安全）
+
+# 标定完成后恢复电机使能
+reload_result = controller.reload_all_motors(restore_previous=True)
+if reload_result['status']:
+    print("✅ 电机已装载恢复到标定前状态")
+```
+
 ### 完整示例
 
-运行完整的手眼标定示例：
+运行完整的标定示例：
 
 ```bash
-# 运行完整的标定流程
+# 眼在手上标定（相机在机械臂末端）
 python examples/eye_in_hand_calibration_example.py --mode full
 
-# 运行快速演示（需要已有标定文件）
+# 眼在手外标定（相机固定在外部）
+python examples/eye_to_hand_calibration_example.py --mode full
+
+# 电机使能管理演示
+python examples/motor_enable_management_example.py
+
+# 快速演示（需要已有标定文件）
 python examples/eye_in_hand_calibration_example.py --mode quick
+python examples/eye_to_hand_calibration_example.py --mode quick
 ```
 
 ## API 文档
@@ -378,7 +461,8 @@ Checksum = ~(ID + Length + cmd + Parm 1 + parm N)
   - 轨迹规划
 - ✅ 视觉系统：完成
   - 相机标定
-  - 手眼标定 (5种算法)
+  - 眼在手上标定 (5种算法)
+  - 眼在手外标定 (5种算法)
   - 自动化数据采集
   - 精度验证
 - ✅ 工具函数：完成
@@ -386,7 +470,8 @@ Checksum = ~(ID + Length + cmd + Parm 1 + parm N)
 
 ## 文档
 
-- 📖 [手眼标定完整指南](docs/hand_eye_calibration_guide.md)
+- 📖 [眼在手上标定指南](docs/hand_eye_calibration_guide.md)
+- 📖 [眼在手外标定指南](docs/eye_to_hand_calibration_guide.md)
 - 🔧 [API 参考文档](README.md#api-文档)
 - 💡 [示例代码](examples/)
 

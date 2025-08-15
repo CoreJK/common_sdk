@@ -19,6 +19,7 @@ from armpi_common.utils import is_flat
 import numpy as np
 from spatialmath import SE3
 from spatialmath.base import rpy2tr
+from typing import List
 
 set_stream_level("DEBUG")
 
@@ -246,7 +247,8 @@ class RobotArmController:
 
         :param int joint_id: 关节ID
         :param int load_or_unload: 
-            0 - 负载
+            0 - 卸载掉电（无力矩输出）
+            1 - 装载电机（有力矩输出）
         """
         cmd_data = CMD_TABLE['SERVO_LOAD_OR_UNLOAD_WRITE'].copy()
         cmd_data[2] = joint_id
@@ -1120,6 +1122,232 @@ class RobotArmController:
                 'info': recv_data['info']
             }
     
+    # ===== 电机使能管理相关方法 =====
+    
+    def get_all_joints_load_status(self) -> dict:
+        """
+        获取所有关节的使能状态
+        
+        Returns:
+            包含所有关节使能状态的字典
+        """
+        logger.info("获取所有关节的使能状态")
+        joint_status = {}
+        failed_joints = []
+        
+        # 获取1-6号关节的使能状态（包括夹爪）
+        for joint_id in range(1, 7):
+            status_result = self.get_joint_load_or_unload(joint_id)
+            if status_result.get('load_or_unload') is not None:
+                joint_status[joint_id] = status_result['load_or_unload']
+                logger.debug(f"关节{joint_id}使能状态: {status_result['load_or_unload']}")
+            else:
+                failed_joints.append(joint_id)
+                logger.warning(f"获取关节{joint_id}使能状态失败")
+        
+        if failed_joints:
+            return {
+                "status": False,
+                "info": f"获取关节{failed_joints}使能状态失败",
+                "joint_status": joint_status,
+                "failed_joints": failed_joints
+            }
+        else:
+            return {
+                "status": True,
+                "info": "成功获取所有关节使能状态",
+                "joint_status": joint_status
+            }
+    
+    def set_all_joints_load_status(self, load_or_unload: int, 
+                                 include_gripper: bool = True) -> dict:
+        """
+        批量设置所有关节的使能状态
+        
+        Args:
+            load_or_unload: 使能状态
+                0 - 卸载掉电（无力矩输出）
+                1 - 装载电机（有力矩输出）
+            include_gripper: 是否包括夹爪（第6关节）
+            
+        Returns:
+            设置结果
+        """
+        logger.info(f"批量设置所有关节使能状态: {load_or_unload}")
+        
+        end_joint = 7 if include_gripper else 6
+        failed_joints = []
+        
+        try:
+            for joint_id in range(1, end_joint):
+                try:
+                    self.set_joint_load_or_unload(joint_id, load_or_unload)
+                    time.sleep(0.1)  # 短暂延时确保指令执行
+                    logger.debug(f"关节{joint_id}使能状态设置为: {load_or_unload}")
+                except Exception as e:
+                    failed_joints.append(joint_id)
+                    logger.error(f"设置关节{joint_id}使能状态失败: {e}")
+            
+            if failed_joints:
+                return {
+                    "status": False,
+                    "info": f"关节{failed_joints}使能状态设置失败",
+                    "failed_joints": failed_joints
+                }
+            else:
+                status_desc = "卸载掉电（无力矩输出）" if load_or_unload == 0 else "装载电机（有力矩输出）"
+                return {
+                    "status": True,
+                    "info": f"成功设置所有关节为{status_desc}状态"
+                }
+                
+        except Exception as e:
+            logger.error(f"批量设置关节使能状态时发生异常: {e}")
+            return {
+                "status": False,
+                "info": f"批量设置失败: {e}"
+            }
+    
+    def unload_all_motors(self, include_gripper: bool = False) -> dict:
+        """
+        卸载所有电机的使能（标定前安全措施）
+        
+        Args:
+            include_gripper: 是否包括夹爪电机
+            
+        Returns:
+            卸载结果
+        """
+        logger.info("🔴 卸载所有电机使能（标定安全模式）")
+        
+        # 首先保存当前使能状态
+        current_status = self.get_all_joints_load_status()
+        if current_status['status']:
+            self._saved_motor_status = current_status['joint_status']
+            logger.debug(f"已保存当前电机使能状态: {self._saved_motor_status}")
+        else:
+            logger.warning("无法保存当前电机使能状态，继续执行卸载操作")
+            self._saved_motor_status = None
+        
+        # 卸载所有电机使能
+        result = self.set_all_joints_load_status(
+            load_or_unload=0,  # 0 = 卸载掉电（无力矩输出）
+            include_gripper=include_gripper
+        )
+        
+        if result['status']:
+            logger.info("✅ 所有电机已卸载使能，进入标定安全模式")
+        else:
+            logger.error("❌ 电机卸载使能失败")
+        
+        return result
+    
+    def reload_all_motors(self, include_gripper: bool = False, 
+                         restore_previous: bool = True) -> dict:
+        """
+        重新使能所有电机（标定后恢复）
+        
+        Args:
+            include_gripper: 是否包括夹爪电机
+            restore_previous: 是否恢复之前保存的状态
+            
+        Returns:
+            恢复结果
+        """
+        logger.info("🟢 恢复所有电机使能（退出标定安全模式）")
+        
+        try:
+            if restore_previous and hasattr(self, '_saved_motor_status') and self._saved_motor_status:
+                # 恢复之前保存的状态
+                logger.info("恢复到标定前的电机使能状态")
+                failed_joints = []
+                
+                end_joint = 7 if include_gripper else 6
+                for joint_id in range(1, end_joint):
+                    if joint_id in self._saved_motor_status:
+                        try:
+                            original_status = self._saved_motor_status[joint_id]
+                            self.set_joint_load_or_unload(joint_id, original_status)
+                            time.sleep(0.1)
+                            logger.debug(f"关节{joint_id}恢复到原状态: {original_status}")
+                        except Exception as e:
+                            failed_joints.append(joint_id)
+                            logger.error(f"恢复关节{joint_id}状态失败: {e}")
+                
+                if failed_joints:
+                    return {
+                        "status": False,
+                        "info": f"关节{failed_joints}状态恢复失败",
+                        "failed_joints": failed_joints
+                    }
+                else:
+                    return {
+                        "status": True,
+                        "info": "成功恢复所有关节到标定前状态"
+                    }
+            else:
+                # 默认使能所有电机
+                logger.info("装载所有电机到默认状态")
+                result = self.set_all_joints_load_status(
+                    load_or_unload=1,  # 1 = 装载电机（有力矩输出）
+                    include_gripper=include_gripper
+                )
+                
+                if result['status']:
+                    logger.info("✅ 所有电机已重新使能")
+                else:
+                    logger.error("❌ 电机重新使能失败")
+                
+                return result
+                
+        except Exception as e:
+            logger.error(f"恢复电机使能时发生异常: {e}")
+            return {
+                "status": False,
+                "info": f"恢复失败: {e}"
+            }
+        finally:
+            # 清理保存的状态
+            if hasattr(self, '_saved_motor_status'):
+                del self._saved_motor_status
+    
+    def check_motors_safety_status(self) -> dict:
+        """
+        检查电机安全状态（是否处于标定安全模式）
+        
+        Returns:
+            安全状态检查结果
+        """
+        status_result = self.get_all_joints_load_status()
+        
+        if not status_result['status']:
+            return {
+                "status": False,
+                "info": "无法获取电机状态",
+                "is_safe_mode": None
+            }
+        
+        joint_status = status_result['joint_status']
+        
+        # 检查1-5号关节（不包括夹爪）是否都已卸载掉电
+        main_joints_unloaded = all(
+            joint_status.get(joint_id, 1) == 0 
+            for joint_id in range(1, 6)
+        )
+        
+        # 统计装载和卸载的关节数量
+        enabled_joints = [jid for jid, status in joint_status.items() if status == 1]  # 装载电机（有力矩输出）
+        disabled_joints = [jid for jid, status in joint_status.items() if status == 0]  # 卸载掉电（无力矩输出）
+        
+        return {
+            "status": True,
+            "info": "电机安全状态检查完成",
+            "is_safe_mode": main_joints_unloaded,
+            "enabled_joints": enabled_joints,
+            "disabled_joints": disabled_joints,
+            "joint_status": joint_status
+        }
+    
     # ===== 手眼标定相关方法 =====
     
     def initialize_hand_eye_calibration(self, 
@@ -1287,6 +1515,16 @@ class RobotArmController:
             
             logger.info(f"开始手眼标定流程，采集{num_poses}个位姿")
             
+            # 标定前安全措施：卸载所有电机使能
+            logger.info("🔴 标定安全检查：卸载所有电机使能")
+            unload_result = self.unload_all_motors(include_gripper=False)
+            if not unload_result['status']:
+                logger.warning(f"电机卸载使能失败，继续执行标定: {unload_result['info']}")
+            else:
+                logger.info("✅ 所有电机已安全卸载，标定可以安全进行")
+            
+            motors_unloaded = unload_result['status']  # 记录是否成功卸载
+            
             # 设置默认工作空间中心
             if workspace_center is None:
                 workspace_center = [0.15, 0.0, 0.20]
@@ -1305,6 +1543,16 @@ class RobotArmController:
             )
             
             if not collection_result['success'] or collection_result['successful_samples'] < 3:
+                # 数据采集失败，恢复电机使能后返回
+                if motors_unloaded:
+                    logger.info("🟢 数据采集失败：恢复电机使能状态")
+                    try:
+                        reload_result = self.reload_all_motors(include_gripper=False, restore_previous=True)
+                        if reload_result['status']:
+                            logger.info("✅ 电机使能状态已恢复")
+                    except Exception as reload_e:
+                        logger.error(f"恢复电机使能时发生异常: {reload_e}")
+                
                 return {
                     "status": False,
                     "info": f"数据采集失败或样本数量不足: {collection_result}",
@@ -1314,6 +1562,16 @@ class RobotArmController:
             # 添加数据到标定器
             added_samples = self.calibration_collector.add_data_to_calibrator(self.hand_eye_calibrator)
             if added_samples < 3:
+                # 样本数量不足，恢复电机使能后返回
+                if motors_unloaded:
+                    logger.info("🟢 样本不足：恢复电机使能状态")
+                    try:
+                        reload_result = self.reload_all_motors(include_gripper=False, restore_previous=True)
+                        if reload_result['status']:
+                            logger.info("✅ 电机使能状态已恢复")
+                    except Exception as reload_e:
+                        logger.error(f"恢复电机使能时发生异常: {reload_e}")
+                
                 return {
                     "status": False,
                     "info": f"有效标定样本数量不足，需要至少3个，实际{added_samples}个"
@@ -1322,6 +1580,16 @@ class RobotArmController:
             # 执行手眼标定
             calibration_success = self.hand_eye_calibrator.solve_hand_eye_calibration(calibration_method)
             if not calibration_success:
+                # 标定算法失败，恢复电机使能后返回
+                if motors_unloaded:
+                    logger.info("🟢 标定算法失败：恢复电机使能状态")
+                    try:
+                        reload_result = self.reload_all_motors(include_gripper=False, restore_previous=True)
+                        if reload_result['status']:
+                            logger.info("✅ 电机使能状态已恢复")
+                    except Exception as reload_e:
+                        logger.error(f"恢复电机使能时发生异常: {reload_e}")
+                
                 return {
                     "status": False,
                     "info": "手眼标定算法执行失败"
@@ -1331,6 +1599,15 @@ class RobotArmController:
             calibration_file = self.calibration_collector.save_directory + "/hand_eye_calibration.json"
             self.hand_eye_calibrator.save_calibration(calibration_file)
             
+            # 标定成功完成，恢复电机使能状态
+            if motors_unloaded:
+                logger.info("🟢 标定完成：恢复电机使能状态")
+                reload_result = self.reload_all_motors(include_gripper=False, restore_previous=True)
+                if reload_result['status']:
+                    logger.info("✅ 电机使能状态已恢复")
+                else:
+                    logger.warning(f"恢复电机使能失败: {reload_result['info']}")
+            
             return {
                 "status": True,
                 "info": "手眼标定成功完成",
@@ -1338,11 +1615,25 @@ class RobotArmController:
                 "added_samples": added_samples,
                 "calibration_error": self.hand_eye_calibrator.calibration_error,
                 "calibration_file": calibration_file,
-                "hand_eye_transform": self.hand_eye_calibrator.hand_eye_transform.A.tolist()
+                "hand_eye_transform": self.hand_eye_calibrator.hand_eye_transform.A.tolist(),
+                "motor_status_restored": motors_unloaded and reload_result.get('status', False) if 'reload_result' in locals() else False
             }
             
         except Exception as e:
             logger.error(f"手眼标定失败: {e}")
+            
+            # 即使发生异常，也要尝试恢复电机使能状态
+            if 'motors_unloaded' in locals() and motors_unloaded:
+                logger.info("🟢 异常处理：尝试恢复电机使能状态")
+                try:
+                    reload_result = self.reload_all_motors(include_gripper=False, restore_previous=True)
+                    if reload_result['status']:
+                        logger.info("✅ 电机使能状态已恢复")
+                    else:
+                        logger.warning(f"恢复电机使能失败: {reload_result['info']}")
+                except Exception as reload_e:
+                    logger.error(f"恢复电机使能时发生异常: {reload_e}")
+            
             return {
                 "status": False,
                 "info": f"手眼标定失败: {e}"
@@ -1571,6 +1862,497 @@ class RobotArmController:
             
         except Exception as e:
             logger.error(f"获取手眼标定信息失败: {e}")
+            return {
+                "status": False,
+                "info": f"获取信息失败: {e}"
+            }
+    
+    # ===== 眼在手外标定相关方法 =====
+    
+    def initialize_eye_to_hand_calibration(self, 
+                                         camera_matrix: np.ndarray = None,
+                                         distortion_coeffs: np.ndarray = None,
+                                         board_size: tuple = (9, 6),
+                                         square_size: float = 0.025,
+                                         camera_source: int = 2,
+                                         camera_pose: List[float] = None,
+                                         board_to_end_transform: np.ndarray = None,
+                                         save_directory: str = "./eye_to_hand_calibration"):
+        """
+        初始化眼在手外标定系统
+        
+        Args:
+            camera_matrix: 相机内参矩阵
+            distortion_coeffs: 相机畸变系数
+            board_size: 标定板尺寸 (列数, 行数)
+            square_size: 标定板方格大小 (米)
+            camera_source: 相机设备ID
+            camera_pose: 相机固定位姿 [x,y,z,rx,ry,rz] (可选)
+            board_to_end_transform: 标定板相对于机械臂末端的变换矩阵 (4x4)
+            save_directory: 保存目录
+            
+        Returns:
+            初始化结果
+        """
+        try:
+            from armpi_common.eye_to_hand_calibration import EyeToHandCalibration
+            from armpi_common.calibration_data_collector import CalibrationDataCollector
+            
+            # 创建眼在手外标定器
+            self.eye_to_hand_calibrator = EyeToHandCalibration(
+                camera_matrix=camera_matrix,
+                distortion_coeffs=distortion_coeffs,
+                board_size=board_size,
+                square_size=square_size,
+                board_to_end_transform=board_to_end_transform
+            )
+            
+            # 创建数据收集器（眼在手外模式）
+            self.eye_to_hand_collector = CalibrationDataCollector(
+                robot_controller=self,
+                camera_source=camera_source,
+                save_directory=save_directory,
+                calibration_type="eye_to_hand",
+                camera_pose=camera_pose
+            )
+            
+            logger.info("眼在手外标定系统初始化成功")
+            return {
+                "status": True,
+                "info": "眼在手外标定系统初始化成功"
+            }
+            
+        except ImportError as e:
+            logger.error(f"导入眼在手外标定模块失败: {e}")
+            return {
+                "status": False,
+                "info": f"导入眼在手外标定模块失败: {e}"
+            }
+        except Exception as e:
+            logger.error(f"眼在手外标定系统初始化失败: {e}")
+            return {
+                "status": False,
+                "info": f"初始化失败: {e}"
+            }
+    
+    def perform_eye_to_hand_calibration(self,
+                                      num_poses: int = 15,
+                                      calibration_method: str = 'tsai',
+                                      workspace_center: list = None,
+                                      workspace_radius: float = 0.05,
+                                      camera_source: int = 2,
+                                      show_preview: bool = True) -> dict:
+        """
+        执行眼在手外标定
+        
+        Args:
+            num_poses: 采集位姿数量
+            calibration_method: 标定方法 ('tsai', 'park', 'horaud', 'andreff', 'daniilidis')
+            workspace_center: 工作空间中心 [x, y, z]
+            workspace_radius: 工作空间半径
+            camera_source: 相机设备ID
+            show_preview: 是否显示预览
+            
+        Returns:
+            标定结果
+        """
+        try:
+            # 检查眼在手外标定系统是否已初始化
+            if not hasattr(self, 'eye_to_hand_calibrator') or not hasattr(self, 'eye_to_hand_collector'):
+                return {
+                    "status": False,
+                    "info": "眼在手外标定系统未初始化，请先调用 initialize_eye_to_hand_calibration"
+                }
+            
+            logger.info(f"开始眼在手外标定流程，采集{num_poses}个位姿")
+            
+            # 标定前安全措施：卸载所有电机使能
+            logger.info("🔴 标定安全检查：卸载所有电机使能")
+            unload_result = self.unload_all_motors(include_gripper=False)
+            if not unload_result['status']:
+                logger.warning(f"电机卸载使能失败，继续执行标定: {unload_result['info']}")
+            else:
+                logger.info("✅ 所有电机已安全卸载，标定可以安全进行")
+            
+            motors_unloaded = unload_result['status']  # 记录是否成功卸载
+            
+            # 设置默认工作空间中心
+            if workspace_center is None:
+                workspace_center = [0.15, 0.0, 0.20]
+            
+            # 生成标定位姿
+            poses = self.eye_to_hand_collector.generate_calibration_poses(
+                num_poses=num_poses,
+                workspace_center=workspace_center,
+                workspace_radius=workspace_radius
+            )
+            
+            # 采集标定数据
+            collection_result = self.eye_to_hand_collector.collect_calibration_data(
+                poses=poses,
+                show_preview=show_preview
+            )
+            
+            if not collection_result['success'] or collection_result['successful_samples'] < 3:
+                # 数据采集失败，恢复电机使能后返回
+                if motors_unloaded:
+                    logger.info("🟢 数据采集失败：恢复电机使能状态")
+                    try:
+                        reload_result = self.reload_all_motors(include_gripper=False, restore_previous=True)
+                        if reload_result['status']:
+                            logger.info("✅ 电机使能状态已恢复")
+                    except Exception as reload_e:
+                        logger.error(f"恢复电机使能时发生异常: {reload_e}")
+                
+                return {
+                    "status": False,
+                    "info": f"数据采集失败或样本数量不足: {collection_result}",
+                    "collection_result": collection_result
+                }
+            
+            # 添加数据到标定器
+            added_samples = self.eye_to_hand_collector.add_data_to_calibrator(self.eye_to_hand_calibrator)
+            if added_samples < 3:
+                # 样本数量不足，恢复电机使能后返回
+                if motors_unloaded:
+                    logger.info("🟢 样本不足：恢复电机使能状态")
+                    try:
+                        reload_result = self.reload_all_motors(include_gripper=False, restore_previous=True)
+                        if reload_result['status']:
+                            logger.info("✅ 电机使能状态已恢复")
+                    except Exception as reload_e:
+                        logger.error(f"恢复电机使能时发生异常: {reload_e}")
+                
+                return {
+                    "status": False,
+                    "info": f"有效标定样本数量不足，需要至少3个，实际{added_samples}个"
+                }
+            
+            # 执行眼在手外标定
+            calibration_success = self.eye_to_hand_calibrator.solve_eye_to_hand_calibration(calibration_method)
+            if not calibration_success:
+                # 标定算法失败，恢复电机使能后返回
+                if motors_unloaded:
+                    logger.info("🟢 标定算法失败：恢复电机使能状态")
+                    try:
+                        reload_result = self.reload_all_motors(include_gripper=False, restore_previous=True)
+                        if reload_result['status']:
+                            logger.info("✅ 电机使能状态已恢复")
+                    except Exception as reload_e:
+                        logger.error(f"恢复电机使能时发生异常: {reload_e}")
+                
+                return {
+                    "status": False,
+                    "info": "眼在手外标定算法执行失败"
+                }
+            
+            # 保存标定结果
+            calibration_file = self.eye_to_hand_collector.save_directory + "/eye_to_hand_calibration.json"
+            self.eye_to_hand_calibrator.save_calibration(calibration_file)
+            
+            # 标定成功完成，恢复电机使能状态
+            if motors_unloaded:
+                logger.info("🟢 标定完成：恢复电机使能状态")
+                reload_result = self.reload_all_motors(include_gripper=False, restore_previous=True)
+                if reload_result['status']:
+                    logger.info("✅ 电机使能状态已恢复")
+                else:
+                    logger.warning(f"恢复电机使能失败: {reload_result['info']}")
+            
+            return {
+                "status": True,
+                "info": "眼在手外标定成功完成",
+                "collection_result": collection_result,
+                "added_samples": added_samples,
+                "calibration_error": self.eye_to_hand_calibrator.calibration_error,
+                "calibration_file": calibration_file,
+                "eye_to_hand_transform": self.eye_to_hand_calibrator.eye_to_hand_transform.A.tolist(),
+                "motor_status_restored": motors_unloaded and reload_result.get('status', False) if 'reload_result' in locals() else False
+            }
+            
+        except Exception as e:
+            logger.error(f"眼在手外标定失败: {e}")
+            
+            # 即使发生异常，也要尝试恢复电机使能状态
+            if 'motors_unloaded' in locals() and motors_unloaded:
+                logger.info("🟢 异常处理：尝试恢复电机使能状态")
+                try:
+                    reload_result = self.reload_all_motors(include_gripper=False, restore_previous=True)
+                    if reload_result['status']:
+                        logger.info("✅ 电机使能状态已恢复")
+                    else:
+                        logger.warning(f"恢复电机使能失败: {reload_result['info']}")
+                except Exception as reload_e:
+                    logger.error(f"恢复电机使能时发生异常: {reload_e}")
+            
+            return {
+                "status": False,
+                "info": f"眼在手外标定失败: {e}"
+            }
+    
+    def load_eye_to_hand_calibration(self, calibration_file: str) -> dict:
+        """
+        加载眼在手外标定结果
+        
+        Args:
+            calibration_file: 标定文件路径
+            
+        Returns:
+            加载结果
+        """
+        try:
+            if not hasattr(self, 'eye_to_hand_calibrator'):
+                from armpi_common.eye_to_hand_calibration import EyeToHandCalibration
+                self.eye_to_hand_calibrator = EyeToHandCalibration()
+            
+            success = self.eye_to_hand_calibrator.load_calibration(calibration_file)
+            if success:
+                return {
+                    "status": True,
+                    "info": "眼在手外标定结果加载成功",
+                    "calibration_error": self.eye_to_hand_calibrator.calibration_error,
+                    "eye_to_hand_transform": self.eye_to_hand_calibrator.eye_to_hand_transform.A.tolist()
+                }
+            else:
+                return {
+                    "status": False,
+                    "info": "眼在手外标定结果加载失败"
+                }
+                
+        except Exception as e:
+            logger.error(f"加载眼在手外标定失败: {e}")
+            return {
+                "status": False,
+                "info": f"加载失败: {e}"
+            }
+    
+    def get_fixed_camera_pose(self) -> dict:
+        """
+        获取固定相机在基座坐标系中的位姿（眼在手外配置）
+        
+        Returns:
+            相机位姿结果
+        """
+        try:
+            if not hasattr(self, 'eye_to_hand_calibrator') or self.eye_to_hand_calibrator.eye_to_hand_transform is None:
+                return {
+                    "status": False,
+                    "info": "眼在手外标定未完成，无法获取相机位姿"
+                }
+            
+            # 获取相机位姿
+            camera_pose = self.eye_to_hand_calibrator.get_camera_pose_in_base()
+            if camera_pose is None:
+                return {
+                    "status": False,
+                    "info": "相机位姿计算失败"
+                }
+            
+            # 提取位姿信息
+            camera_position = camera_pose.t.tolist()
+            camera_orientation = camera_pose.rpy(order='zyx').tolist()
+            
+            return {
+                "status": True,
+                "info": "固定相机位姿获取成功",
+                "camera_pose": camera_position + camera_orientation,
+                "camera_transform_matrix": camera_pose.A.tolist()
+            }
+            
+        except Exception as e:
+            logger.error(f"获取固定相机位姿失败: {e}")
+            return {
+                "status": False,
+                "info": f"获取失败: {e}"
+            }
+    
+    def get_board_pose_from_robot_pose(self, robot_pose: list = None) -> dict:
+        """
+        根据机器人位姿计算标定板在基座坐标系中的位姿（眼在手外配置）
+        
+        Args:
+            robot_pose: 机器人末端位姿，为None时使用当前位姿
+            
+        Returns:
+            标定板位姿结果
+        """
+        try:
+            if not hasattr(self, 'eye_to_hand_calibrator') or self.eye_to_hand_calibrator.eye_to_hand_transform is None:
+                return {
+                    "status": False,
+                    "info": "眼在手外标定未完成，无法计算标定板位姿"
+                }
+            
+            # 获取机器人位姿
+            if robot_pose is None:
+                fk_result = self.get_joint_fkine(current_pose=True)
+                if not fk_result or fk_result['fkine'] is None:
+                    return {
+                        "status": False,
+                        "info": "无法获取当前机器人位姿"
+                    }
+                robot_pose = fk_result['fkine']
+            
+            # 计算标定板位姿
+            board_pose = self.eye_to_hand_calibrator.get_board_pose_from_robot(robot_pose)
+            if board_pose is None:
+                return {
+                    "status": False,
+                    "info": "标定板位姿计算失败"
+                }
+            
+            # 提取位姿信息
+            board_position = board_pose.t.tolist()
+            board_orientation = board_pose.rpy(order='zyx').tolist()
+            
+            return {
+                "status": True,
+                "info": "标定板位姿计算成功",
+                "board_pose": board_position + board_orientation,
+                "board_transform_matrix": board_pose.A.tolist()
+            }
+            
+        except Exception as e:
+            logger.error(f"计算标定板位姿失败: {e}")
+            return {
+                "status": False,
+                "info": f"计算失败: {e}"
+            }
+    
+    def validate_eye_to_hand_calibration(self, 
+                                       test_poses: list = None,
+                                       camera_source: int = 2,
+                                       num_test_poses: int = 5) -> dict:
+        """
+        验证眼在手外标定精度
+        
+        Args:
+            test_poses: 测试位姿列表，为None时自动生成
+            camera_source: 相机设备ID
+            num_test_poses: 测试位姿数量
+            
+        Returns:
+            验证结果
+        """
+        try:
+            if not hasattr(self, 'eye_to_hand_calibrator') or self.eye_to_hand_calibrator.eye_to_hand_transform is None:
+                return {
+                    "status": False,
+                    "info": "眼在手外标定未完成，无法进行验证"
+                }
+            
+            # 生成测试位姿
+            if test_poses is None:
+                if hasattr(self, 'eye_to_hand_collector'):
+                    test_poses = self.eye_to_hand_collector.generate_calibration_poses(
+                        num_poses=num_test_poses,
+                        workspace_center=[0.15, 0.0, 0.20],
+                        workspace_radius=0.03
+                    )
+                else:
+                    return {
+                        "status": False,
+                        "info": "无法生成测试位姿，请提供test_poses参数"
+                    }
+            
+            validation_results = []
+            successful_validations = 0
+            
+            # 初始化相机
+            import cv2
+            cap = cv2.VideoCapture(camera_source)
+            if not cap.isOpened():
+                return {
+                    "status": False,
+                    "info": f"无法打开相机: {camera_source}"
+                }
+            
+            try:
+                for i, pose in enumerate(test_poses):
+                    logger.info(f"验证测试位姿 {i+1}/{len(test_poses)}")
+                    
+                    # 移动到测试位姿
+                    move_result = self.set_joint_move_with_coordinate(pose, move_type=0, move_time=3000)
+                    if not move_result['status']:
+                        logger.warning(f"无法移动到测试位姿 {i+1}")
+                        continue
+                    
+                    time.sleep(3.5)  # 等待移动完成
+                    
+                    # 采集图像
+                    ret, image = cap.read()
+                    if not ret:
+                        logger.warning(f"采集测试图像 {i+1} 失败")
+                        continue
+                    
+                    # 验证标定
+                    validation = self.eye_to_hand_calibrator.validate_calibration(pose, image)
+                    if validation:
+                        validation_results.append(validation)
+                        successful_validations += 1
+                        logger.info(f"测试位姿 {i+1} 验证成功: "
+                                  f"平移误差={validation.get('translation_error_mm', 0):.2f}mm")
+                    else:
+                        logger.warning(f"测试位姿 {i+1} 验证失败")
+            
+            finally:
+                cap.release()
+            
+            # 计算统计结果
+            if validation_results:
+                translation_errors = [r.get('translation_error_mm', 0) for r in validation_results]
+                rotation_errors = [r.get('rotation_error_deg', 0) for r in validation_results]
+                
+                summary = {
+                    "status": True,
+                    "info": "眼在手外标定验证完成",
+                    "successful_tests": successful_validations,
+                    "total_tests": len(test_poses),
+                    "success_rate": successful_validations / len(test_poses),
+                    "mean_translation_error_mm": np.mean(translation_errors),
+                    "std_translation_error_mm": np.std(translation_errors),
+                    "mean_rotation_error_deg": np.mean(rotation_errors),
+                    "std_rotation_error_deg": np.std(rotation_errors),
+                    "detailed_results": validation_results
+                }
+            else:
+                summary = {
+                    "status": False,
+                    "info": "没有成功的验证结果",
+                    "successful_tests": 0,
+                    "total_tests": len(test_poses)
+                }
+            
+            logger.info(f"眼在手外标定验证完成: 成功率={summary.get('success_rate', 0):.1%}")
+            return summary
+            
+        except Exception as e:
+            logger.error(f"眼在手外标定验证失败: {e}")
+            return {
+                "status": False,
+                "info": f"验证失败: {e}"
+            }
+    
+    def get_eye_to_hand_calibration_info(self) -> dict:
+        """
+        获取眼在手外标定信息摘要
+        
+        Returns:
+            标定信息
+        """
+        if not hasattr(self, 'eye_to_hand_calibrator'):
+            return {
+                "status": False,
+                "info": "眼在手外标定系统未初始化"
+            }
+        
+        try:
+            calibration_info = self.eye_to_hand_calibrator.get_calibration_info()
+            calibration_info['status'] = True
+            return calibration_info
+            
+        except Exception as e:
+            logger.error(f"获取眼在手外标定信息失败: {e}")
             return {
                 "status": False,
                 "info": f"获取信息失败: {e}"

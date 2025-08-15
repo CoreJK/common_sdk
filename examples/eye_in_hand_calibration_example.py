@@ -266,6 +266,16 @@ def main():
         controller = RobotArmController(device=robot_device)
         controller.enable_reception(True)
         print("✅ 机械臂连接成功")
+        
+        # 检查电机安全状态
+        safety_status = controller.check_motors_safety_status()
+        if safety_status['status']:
+            print(f"📊 电机状态检查: 使能关节{safety_status['enabled_joints']}, 卸载关节{safety_status['disabled_joints']}")
+            if safety_status['is_safe_mode']:
+                print("⚠️  检测到电机已处于安全模式（已卸载使能）")
+            else:
+                print("ℹ️  电机当前处于正常工作状态")
+        
     except Exception as e:
         print(f"❌ 机械臂连接失败: {e}")
         print("请检查设备连接和权限设置")
