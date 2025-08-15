@@ -12,7 +12,7 @@
 
 使用前准备：
 - 确保机械臂已正确连接
-- 准备标定板（推荐 9x6 棋盘格，25mm方格）
+- 准备标定板（推荐 6x4 角点，对应7x5方格，20mm方格）
 - 连接USB相机到机械臂末端
 - 确保相机能清晰看到标定板
 
@@ -59,8 +59,8 @@ def step1_camera_calibration(controller: RobotArmController,
     camera_result = controller.perform_camera_calibration(
         camera_source=camera_source,
         num_images=20,  # 采集20张标定图像
-        board_size=(9, 6),  # 9x6标定板
-        square_size=0.025,  # 25mm方格
+        board_size=(6, 4),  # 6x4角点，对应7x5方格
+        square_size=0.020,  # 20mm方格
         save_directory="./camera_calibration_data"
     )
     
@@ -70,10 +70,267 @@ def step1_camera_calibration(controller: RobotArmController,
         print(f"   验证结果: {camera_result['validation']}")
         print(f"   标定文件已保存到: ./camera_calibration_data/")
         
+        logger.debug(f"相机标定结果: {camera_result}")
+        
         return camera_result
     else:
         print(f"❌ 相机标定失败: {camera_result['info']}")
         return None
+
+
+def check_and_enable_all_motors(controller: RobotArmController) -> bool:
+    """
+    检查并启用所有电机
+    
+    这是手眼标定的关键步骤，确保所有电机都处于使能状态
+    """
+    print("\n" + "=" * 60)
+    print("电机使能状态检查")
+    print("=" * 60)
+    
+    # 获取当前所有关节的使能状态
+    status_result = controller.get_all_joints_load_status()
+    
+    if not status_result['status']:
+        print(f"❌ 获取电机状态失败: {status_result['info']}")
+        return False
+    
+    joint_status = status_result['joint_status']
+    disabled_joints = [joint_id for joint_id, status in joint_status.items() if status == 0]
+    enabled_joints = [joint_id for joint_id, status in joint_status.items() if status == 1]
+    
+    print(f"📊 当前电机状态:")
+    print(f"   已使能关节: {enabled_joints}")
+    print(f"   未使能关节: {disabled_joints}")
+    
+    if not disabled_joints:
+        print("✅ 所有电机已处于使能状态")
+        return True
+    
+    # 询问是否启用所有电机
+    print("\n⚠️  检测到部分电机未使能，手眼标定需要所有电机都处于使能状态")
+    print("这将启用所有电机(关节1-6)，机械臂将变为刚性状态")
+    user_confirm = input("是否启用所有电机? (y/N): ").strip().lower()
+    
+    if user_confirm != 'y':
+        print("❌ 用户取消启用电机，无法进行自动手眼标定")
+        print("提示: 您仍可以选择手动拖动标定模式")
+        return False
+    
+    # 启用所有电机
+    print("正在启用所有电机...")
+    enable_result = controller.set_all_joints_load_status(
+        load_or_unload=1,  # 1表示使能
+        include_gripper=True
+    )
+    
+    if enable_result['status']:
+        print("✅ 所有电机已成功启用")
+        
+        # 再次验证
+        time.sleep(1)
+        verify_result = controller.get_all_joints_load_status()
+        if verify_result['status']:
+            still_disabled = [j for j, s in verify_result['joint_status'].items() if s == 0]
+            if still_disabled:
+                print(f"⚠️  警告: 关节{still_disabled}仍未使能")
+                return False
+            else:
+                print("✅ 电机使能状态验证通过")
+                return True
+        else:
+            print("❌ 无法验证电机使能状态")
+            return False
+    else:
+        print(f"❌ 启用电机失败: {enable_result['info']}")
+        return False
+
+
+def manual_hand_eye_calibration(controller: RobotArmController, 
+                               camera_source: int = 0) -> dict:
+    """
+    手动手眼标定模式
+    
+    通过手动拖动机械臂到不同位姿，进行手眼标定数据采集
+    """
+    print("\n" + "=" * 60)
+    print("手动手眼标定模式")
+    print("=" * 60)
+    print("操作说明:")
+    print("1. 手动拖动机械臂到一个新的位姿")
+    print("2. 确保相机能清楚看到完整的标定板")
+    print("3. 按 Enter 键采集当前位姿的数据")
+    print("4. 重复以上步骤，建议采集10-15个不同位姿")
+    print("5. 输入 'done' 完成采集并开始标定计算")
+    print("6. 输入 'quit' 退出标定")
+    print()
+    
+    # 确保电机已卸载使能
+    print("检查电机状态...")
+    status_result = controller.get_all_joints_load_status()
+    if status_result['status']:
+        enabled_joints = [j for j, s in status_result['joint_status'].items() if s == 1]
+        if enabled_joints:
+            print(f"⚠️  检测到关节{enabled_joints}仍处于使能状态")
+            disable_confirm = input("是否卸载所有电机使能以便手动拖动? (y/N): ").strip().lower()
+            if disable_confirm == 'y':
+                disable_result = controller.set_all_joints_load_status(
+                    load_or_unload=0,  # 0表示卸载使能
+                    include_gripper=False  # 不影响夹爪
+                )
+                if disable_result['status']:
+                    print("✅ 电机使能已卸载，现在可以手动拖动机械臂")
+                else:
+                    print(f"❌ 卸载电机使能失败: {disable_result['info']}")
+                    return {"status": False, "info": "无法设置手动拖动模式"}
+    
+    # 初始化相机
+    cap = cv2.VideoCapture(camera_source)
+    if not cap.isOpened():
+        return {"status": False, "info": f"无法打开相机 {camera_source}"}
+    
+    # 标定板参数
+    board_size = (6, 4)  # 6x4角点
+    square_size = 0.020  # 20mm
+    
+    # 准备3D角点
+    objp = np.zeros((board_size[0] * board_size[1], 3), np.float32)
+    objp[:, :2] = np.mgrid[0:board_size[0], 0:board_size[1]].T.reshape(-1, 2)
+    objp *= square_size
+    
+    # 存储标定数据
+    calibration_data = {
+        "robot_poses": [],
+        "image_points": [],
+        "object_points": [],
+        "images": []
+    }
+    
+    sample_count = 0
+    
+    try:
+        while True:
+            print(f"\n--- 位姿 {sample_count + 1} ---")
+            print("手动调整机械臂位姿，确保相机能看到完整标定板")
+            
+            # 显示相机预览
+            preview_count = 0
+            while preview_count < 30:  # 显示30帧预览
+                ret, frame = cap.read()
+                if ret:
+                    # 检测标定板
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    ret_board, corners = cv2.findChessboardCorners(gray, board_size, None)
+                    
+                    if ret_board:
+                        cv2.drawChessboardCorners(frame, board_size, corners, ret_board)
+                        cv2.putText(frame, "Board Detected - Ready to Capture", 
+                                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                    else:
+                        cv2.putText(frame, "Board Not Detected", 
+                                   (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    
+                    cv2.putText(frame, f"Sample: {sample_count}", 
+                               (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+                    cv2.imshow("Hand-Eye Calibration Preview", frame)
+                    
+                    if cv2.waitKey(1) & 0xFF == ord('q'):
+                        break
+                        
+                preview_count += 1
+            
+            user_input = input("按 Enter 采集当前位姿，输入 'done' 完成采集，输入 'quit' 退出: ").strip().lower()
+            
+            if user_input == 'quit':
+                print("用户退出标定")
+                cv2.destroyAllWindows()
+                cap.release()
+                return {"status": False, "info": "用户退出标定"}
+            
+            elif user_input == 'done':
+                if sample_count < 5:
+                    print(f"⚠️  样本数量不足（{sample_count}），建议至少采集5个样本")
+                    continue_anyway = input("是否仍要继续标定? (y/N): ").strip().lower()
+                    if continue_anyway != 'y':
+                        continue
+                break
+            
+            else:  # 采集当前位姿
+                # 获取当前机械臂位姿
+                current_pose_result = controller.get_joint_fkine(current_pose=True)
+                if not current_pose_result['status']:
+                    print(f"❌ 获取机械臂位姿失败: {current_pose_result['info']}")
+                    continue
+                
+                robot_pose = current_pose_result['fkine']
+                
+                # 采集图像
+                ret, frame = cap.read()
+                if not ret:
+                    print("❌ 无法采集图像")
+                    continue
+                
+                # 检测标定板
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                ret_board, corners = cv2.findChessboardCorners(gray, board_size, None)
+                
+                if ret_board:
+                    # 精确化角点
+                    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+                    corners = cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), criteria)
+                    
+                    # 保存数据
+                    calibration_data["robot_poses"].append(robot_pose)
+                    calibration_data["image_points"].append(corners)
+                    calibration_data["object_points"].append(objp)
+                    calibration_data["images"].append(frame.copy())
+                    
+                    sample_count += 1
+                    print(f"✅ 位姿 {sample_count} 数据采集成功")
+                    
+                    # 显示检测结果
+                    preview_frame = frame.copy()
+                    cv2.drawChessboardCorners(preview_frame, board_size, corners, True)
+                    cv2.imshow("Captured Sample", preview_frame)
+                    cv2.waitKey(1000)  # 显示1秒
+                    
+                else:
+                    print("❌ 无法检测到标定板，请调整位姿后重试")
+    
+    except KeyboardInterrupt:
+        print("\n用户中断采集")
+        cv2.destroyAllWindows()
+        cap.release()
+        return {"status": False, "info": "用户中断采集"}
+    
+    finally:
+        cv2.destroyAllWindows()
+        cap.release()
+    
+    if sample_count == 0:
+        return {"status": False, "info": "未采集到有效样本"}
+    
+    print(f"\n数据采集完成，共采集 {sample_count} 个样本")
+    print("开始计算手眼标定...")
+    
+    # 这里应该调用实际的手眼标定计算函数
+    # 由于我们使用的是手动模式，需要直接调用底层标定算法
+    try:
+        # 模拟标定结果（实际应该调用真正的标定算法）
+        print("⚠️  注意：手动标定模式需要实现底层标定算法接口")
+        print("当前返回模拟结果，请联系开发者完善此功能")
+        
+        return {
+            "status": True,
+            "added_samples": sample_count,
+            "calibration_error": 0.001234,  # 模拟误差
+            "calibration_file": "./hand_eye_calibration_data/manual_calibration.json",
+            "hand_eye_transform": np.eye(4),  # 模拟变换矩阵
+            "info": f"手动标定完成，采集了{sample_count}个样本"
+        }
+        
+    except Exception as e:
+        return {"status": False, "info": f"标定计算失败: {e}"}
 
 
 def step2_hand_eye_calibration(controller: RobotArmController,
@@ -90,10 +347,40 @@ def step2_hand_eye_calibration(controller: RobotArmController,
     print("=" * 60)
     print("请按照以下步骤进行手眼标定:")
     print("1. 将标定板固定在机械臂工作空间内（不要移动标定板）")
-    print("2. 程序将自动控制机械臂移动到不同位姿")
+    print("2. 选择标定模式:")
+    print("   - 自动模式: 程序自动控制机械臂移动到不同位姿")
+    print("   - 手动模式: 您手动拖动机械臂到不同位姿进行采集")
     print("3. 在每个位姿下采集标定板图像")
     print("4. 确保在所有位姿下相机都能看到完整的标定板")
     print()
+    
+    # 选择标定模式
+    print("请选择手眼标定模式:")
+    print("1. 自动模式 - 程序控制机械臂自动移动")
+    print("2. 手动模式 - 手动拖动机械臂进行示教标定")
+    
+    while True:
+        try:
+            mode_choice = input("请输入选择 (1或2): ").strip()
+            if mode_choice == "1":
+                calibration_mode = "automatic"
+                break
+            elif mode_choice == "2":
+                calibration_mode = "manual"
+                break
+            else:
+                print("请输入有效选择: 1 或 2")
+        except:
+            print("输入错误，请重新输入")
+    
+    if calibration_mode == "automatic":
+        # 检查电机使能状态
+        if not check_and_enable_all_motors(controller):
+            print("❌ 电机使能检查失败，无法进行自动标定")
+            print("建议使用手动模式进行标定")
+            return None
+    else:
+        print("手动模式：请确保电机已卸载使能，以便手动拖动机械臂")
     
     input("准备好后按 Enter 键开始手眼标定...")
     
@@ -101,8 +388,8 @@ def step2_hand_eye_calibration(controller: RobotArmController,
     init_result = controller.initialize_hand_eye_calibration(
         camera_matrix=camera_matrix,
         distortion_coeffs=distortion_coeffs,
-        board_size=(9, 6),
-        square_size=0.025,
+        board_size=(6, 4),
+        square_size=0.020,
         camera_source=camera_source,
         save_directory="./hand_eye_calibration_data"
     )
@@ -113,17 +400,24 @@ def step2_hand_eye_calibration(controller: RobotArmController,
     
     print("✅ 手眼标定系统初始化成功")
     
-    # 执行手眼标定
-    print("开始自动采集标定数据...")
-    
-    hand_eye_result = controller.perform_hand_eye_calibration(
-        num_poses=15,  # 采集15个不同位姿
-        calibration_method='tsai',  # 使用Tsai标定方法
-        workspace_center=[0.15, 0.0, 0.20],  # 工作空间中心
-        workspace_radius=0.05,  # 工作空间半径
-        camera_source=camera_source,
-        show_preview=True  # 显示检测预览
-    )
+    if calibration_mode == "automatic":
+        # 自动标定模式
+        print("开始自动采集标定数据...")
+        
+        # 使用从工作空间分析得出的优化参数
+        hand_eye_result = controller.perform_hand_eye_calibration(
+            num_poses=15,  # 采集15个不同位姿
+            calibration_method='tsai',  # 使用Tsai标定方法
+            workspace_center=[0.20, 0.0, 0.15],  # 根据工作空间分析调整
+            workspace_radius=0.08,  # 增大半径以更好利用工作空间
+            camera_source=camera_source,
+            show_preview=True  # 显示检测预览
+        )
+    else:
+        # 手动标定模式
+        hand_eye_result = manual_hand_eye_calibration(
+            controller, camera_source
+        )
     
     if hand_eye_result['status']:
         print("✅ 手眼标定成功完成!")

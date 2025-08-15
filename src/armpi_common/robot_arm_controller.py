@@ -902,6 +902,7 @@ class RobotArmController:
             if not is_flat(position_list):
                 logger.error(f"关节脉冲列表不能嵌套, 只能是一维列表")
                 return {
+                    "status": False,
                     "fkine": None,
                     "info": "关节脉冲列表不能嵌套, 只能是一维列表"
                 }
@@ -909,6 +910,7 @@ class RobotArmController:
             if len(position_list) != 5:
                 logger.error(f"关节脉冲列表长度为 {len(position_list)}，预期为 5")
                 return {
+                    "status": False,
                     "fkine": None,
                     "info": "关节脉冲列表长度为 {len(position_list)}，预期为 5"
                 }
@@ -916,6 +918,7 @@ class RobotArmController:
             if not all(isinstance(x, int) for x in position_list):
                 logger.error(f"关节脉冲列表中的元素必须是整数")
                 return {
+                    "status": False,
                     "fkine": None,
                     "info": "关节脉冲列表中的元素必须是整数"
                 }
@@ -925,6 +928,7 @@ class RobotArmController:
         if position_list is None:
             logger.error(f"获取所有关节的位置失败")
             return {
+                "status": False,
                 "fkine": None,
                 "info": "获取所有关节的位置失败"
             }
@@ -934,6 +938,7 @@ class RobotArmController:
         Rx, Py, Yz = translation_vector.rpy(order="zyx") # 旋转角
         
         return {
+            "status": True,
             "fkine": [x, y, z, Rx, Py, Yz],
             "info": "获取机械臂的正解成功"
         }
@@ -946,6 +951,7 @@ class RobotArmController:
             if fkine is None:
                 logger.error(f"获取机械臂的正解失败")
                 return {
+                    "status": False,
                     "ikine": None,
                     "info": "获取机械臂的正解失败"
                 }
@@ -955,6 +961,7 @@ class RobotArmController:
             if not is_flat(end_tool_coordinate_list):
                 logger.error(f"末端坐标列表不能嵌套, 只能是一维列表")
                 return {
+                    "status": False,
                     "ikine": None,
                     "info": "末端坐标列表不能嵌套, 只能是一维列表"
                 }
@@ -962,6 +969,7 @@ class RobotArmController:
             if not all(isinstance(x, (int, float)) for x in end_tool_coordinate_list):
                 logger.error(f"末端坐标列表中的元素必须是整数或浮点数")
                 return {
+                    "status": False,
                     "ikine": None,
                     "info": "末端坐标列表中的元素必须是整数或浮点数"
                 }
@@ -969,6 +977,7 @@ class RobotArmController:
             if len(end_tool_coordinate_list) != 6:
                 logger.error(f"末端坐标列表长度为 {len(end_tool_coordinate_list)}，预期为 6")
                 return {
+                    "status": False,
                     "ikine": None,
                     "info": "末端坐标列表长度为 {len(end_tool_coordinate_list)}，预期为 6"
                 }
@@ -981,12 +990,14 @@ class RobotArmController:
             inverse_result = np.round(sol.q, 6).tolist()
             joint_pluse = angle2pulse([inverse_result], convert_int=True)
             return {
+                "status": True,
                 "ikine": joint_pluse[0], # 兼容关节转脉冲函数, 未来可能支持多组动作返回的情况
                 "info": "获取机械臂的逆解成功"
             }
         else:
             logger.error(f"获取机械臂的逆解失败")
             return {
+                "status": False,
                 "ikine": None,
                 "info": "获取机械臂的逆解失败"
             }
