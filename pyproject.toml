@@ -5,7 +5,7 @@ description = "armpi 通信 sdk"
 authors = [
     {name = "任伟明", email = "corejk@163.com"},
 ]
-dependencies = ["pyserial>=3.5", "roboticstoolbox-python>=1.1.1"]
+dependencies = ["pyserial>=3.5", "roboticstoolbox-python>=1.1.1", "opencv-python>=4.11.0.86"]
 requires-python = "<3.12,>=3.8"
 readme = "README.md"
 license = {text = "MIT"}

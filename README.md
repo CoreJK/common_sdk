@@ -70,10 +70,25 @@ tool_link = 0.1126
   - 位置、温度、电压监控
   - 配置参数读取
 
+- 🔥 **视觉系统** (**新增**)
+  - 眼在手上（Eye-in-Hand）标定
+  - 相机内参标定
+  - 手眼变换矩阵计算
+  - 多种标定算法支持（Tsai、Park、Horaud等）
+  - 自动化数据采集
+  - 标定精度验证
+
+- 🤖 **运动学系统**
+  - 正向运动学 (Forward Kinematics)
+  - 逆向运动学 (Inverse Kinematics)
+  - 轨迹规划和插值
+  - 工作空间分析
+
 - 🛠️ **工具函数**
   - 校验和计算
   - 字节操作工具
   - 协议解析工具
+  - 角度和脉冲转换
 
 ## 安装
 
@@ -81,6 +96,7 @@ tool_link = 0.1126
 
 - Python >= 3.8
 - 支持串口通信的硬件设备
+- 用于视觉功能的 USB 相机（可选）
 
 ### 安装依赖
 
@@ -91,6 +107,9 @@ pdm install
 # 创建虚拟环境后，再使用 pip 去创建虚拟环境，涉及到较多依赖
 # 或者使用 pip
 pip install -r requirements.txt
+
+# 视觉功能额外依赖（可选）
+pip install opencv-python scipy
 ```
 
 ## 快速开始
@@ -163,6 +182,95 @@ print(f"关节1电压: {voltage}")
 # 读取关节模式和速度
 mode_speed = controller.get_joint_mode_and_speed(1)
 print(f"关节1模式和速度: {mode_speed}")
+```
+
+### 运动学控制
+
+```python
+# 正向运动学：根据关节角度计算末端位姿
+fk_result = controller.get_joint_fkine(current_pose=True)
+if fk_result['fkine']:
+    x, y, z, rx, ry, rz = fk_result['fkine']
+    print(f"末端位置: [{x:.3f}, {y:.3f}, {z:.3f}]")
+    print(f"末端姿态: [{rx:.3f}, {ry:.3f}, {rz:.3f}]")
+
+# 逆向运动学：根据目标位姿计算关节角度
+target_pose = [0.15, 0.0, 0.20, 0.0, 0.0, -3.14159]
+ik_result = controller.get_joint_ikine(target_pose)
+if ik_result['ikine']:
+    joint_pulses = ik_result['ikine']
+    print(f"关节脉冲值: {joint_pulses}")
+
+# 坐标控制：直接移动到目标位姿
+move_result = controller.set_joint_move_with_coordinate(
+    target_pose, move_type=0, move_time=3000
+)
+if move_result['status']:
+    print("运动指令发送成功")
+
+# 轨迹规划：在两个位姿之间平滑移动
+start_pose = [0.10, 0.0, 0.15, 0.0, 0.0, -3.14159]
+end_pose = [0.20, 0.0, 0.25, 0.0, 0.0, -3.14159]
+trajectory_result = controller.move_between_coordinates(
+    start_pose, end_pose, duration_ms=5000, steps=50
+)
+```
+
+### 眼在手上标定
+
+```python
+# 1. 相机标定：获取相机内参
+camera_result = controller.perform_camera_calibration(
+    camera_source=0,           # 相机设备ID
+    num_images=20,            # 采集图像数量
+    board_size=(9, 6),        # 标定板尺寸
+    square_size=0.025         # 方格大小(米)
+)
+
+if camera_result['status']:
+    print("相机标定成功")
+    
+    # 2. 手眼标定：获取相机与机械臂的变换关系
+    # 使用相机标定结果
+    import numpy as np
+    camera_matrix = np.array(camera_result['camera_matrix'])
+    distortion_coeffs = np.array(camera_result['distortion_coeffs'])
+    
+    # 初始化手眼标定系统
+    init_result = controller.initialize_hand_eye_calibration(
+        camera_matrix=camera_matrix,
+        distortion_coeffs=distortion_coeffs
+    )
+    
+    if init_result['status']:
+        # 执行手眼标定
+        hand_eye_result = controller.perform_hand_eye_calibration(
+            num_poses=15,              # 采集位姿数量
+            calibration_method='tsai'   # 标定算法
+        )
+        
+        if hand_eye_result['status']:
+            print("手眼标定成功")
+            print(f"标定误差: {hand_eye_result['calibration_error']:.6f}")
+            
+            # 3. 使用标定结果
+            # 获取相机在基座坐标系中的位姿
+            camera_pose = controller.get_camera_pose_in_base()
+            if camera_pose['status']:
+                pose = camera_pose['camera_pose']
+                print(f"相机位姿: {pose}")
+```
+
+### 完整示例
+
+运行完整的手眼标定示例：
+
+```bash
+# 运行完整的标定流程
+python examples/eye_in_hand_calibration_example.py --mode full
+
+# 运行快速演示（需要已有标定文件）
+python examples/eye_in_hand_calibration_example.py --mode quick
 ```
 
 ## API 文档
@@ -264,8 +372,23 @@ Checksum = ~(ID + Length + cmd + Parm 1 + parm N)
 
 - ✅ 写指令接口：100% 完成 (14/14)
 - ✅ 读指令接口：100% 完成 (14/14)
+- ✅ 运动学系统：完成
+  - 正向运动学
+  - 逆向运动学
+  - 轨迹规划
+- ✅ 视觉系统：完成
+  - 相机标定
+  - 手眼标定 (5种算法)
+  - 自动化数据采集
+  - 精度验证
 - ✅ 工具函数：完成
 - ✅ 协议解析：完成
+
+## 文档
+
+- 📖 [手眼标定完整指南](docs/hand_eye_calibration_guide.md)
+- 🔧 [API 参考文档](README.md#api-文档)
+- 💡 [示例代码](examples/)
 
 ## 贡献
 

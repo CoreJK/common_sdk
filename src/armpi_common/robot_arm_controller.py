@@ -1120,6 +1120,462 @@ class RobotArmController:
                 'info': recv_data['info']
             }
     
+    # ===== 手眼标定相关方法 =====
+    
+    def initialize_hand_eye_calibration(self, 
+                                      camera_matrix: np.ndarray = None,
+                                      distortion_coeffs: np.ndarray = None,
+                                      board_size: tuple = (9, 6),
+                                      square_size: float = 0.025,
+                                      camera_source: int = 2,
+                                      save_directory: str = "./hand_eye_calibration"):
+        """
+        初始化手眼标定系统
+        
+        Args:
+            camera_matrix: 相机内参矩阵
+            distortion_coeffs: 相机畸变系数
+            board_size: 标定板尺寸 (列数, 行数)
+            square_size: 标定板方格大小 (米)
+            camera_source: 相机设备ID
+            save_directory: 保存目录
+            
+        Returns:
+            初始化结果
+        """
+        try:
+            from armpi_common.hand_eye_calibration import HandEyeCalibration
+            from armpi_common.calibration_data_collector import CalibrationDataCollector
+            
+            # 创建手眼标定器
+            self.hand_eye_calibrator = HandEyeCalibration(
+                camera_matrix=camera_matrix,
+                distortion_coeffs=distortion_coeffs,
+                board_size=board_size,
+                square_size=square_size
+            )
+            
+            # 创建数据收集器
+            self.calibration_collector = CalibrationDataCollector(
+                robot_controller=self,
+                camera_source=camera_source,
+                save_directory=save_directory
+            )
+            
+            logger.info("手眼标定系统初始化成功")
+            return {
+                "status": True,
+                "info": "手眼标定系统初始化成功"
+            }
+            
+        except ImportError as e:
+            logger.error(f"导入手眼标定模块失败: {e}")
+            return {
+                "status": False,
+                "info": f"导入手眼标定模块失败: {e}"
+            }
+        except Exception as e:
+            logger.error(f"手眼标定系统初始化失败: {e}")
+            return {
+                "status": False,
+                "info": f"初始化失败: {e}"
+            }
+    
+    def perform_camera_calibration(self, 
+                                 camera_source: int = 0,
+                                 num_images: int = 20,
+                                 board_size: tuple = (9, 6),
+                                 square_size: float = 0.025,
+                                 save_directory: str = "./camera_calibration") -> dict:
+        """
+        执行相机标定
+        
+        Args:
+            camera_source: 相机设备ID
+            num_images: 采集图像数量
+            board_size: 标定板尺寸
+            square_size: 方格大小
+            save_directory: 保存目录
+            
+        Returns:
+            标定结果
+        """
+        try:
+            from armpi_common.camera_calibration import CameraCalibration
+            
+            logger.info("开始相机标定流程")
+            
+            # 创建相机标定器
+            camera_calibrator = CameraCalibration(
+                board_size=board_size,
+                square_size=square_size,
+                save_directory=save_directory
+            )
+            
+            # 采集标定图像
+            collected = camera_calibrator.collect_calibration_images(
+                camera_source=camera_source,
+                num_images=num_images,
+                auto_capture=True
+            )
+            
+            if collected < 10:
+                return {
+                    "status": False,
+                    "info": f"采集的有效图像数量不足，需要至少10张，实际采集{collected}张"
+                }
+            
+            # 执行标定
+            success = camera_calibrator.calibrate_camera()
+            if not success:
+                return {
+                    "status": False,
+                    "info": "相机标定失败"
+                }
+            
+            # 保存结果
+            camera_calibrator.save_calibration()
+            
+            # 验证标定
+            validation = camera_calibrator.validate_calibration()
+            
+            return {
+                "status": True,
+                "info": "相机标定成功",
+                "camera_matrix": camera_calibrator.camera_matrix.tolist(),
+                "distortion_coeffs": camera_calibrator.distortion_coeffs.tolist(),
+                "calibration_error": camera_calibrator.calibration_error,
+                "validation": validation,
+                "calibrator": camera_calibrator
+            }
+            
+        except Exception as e:
+            logger.error(f"相机标定失败: {e}")
+            return {
+                "status": False,
+                "info": f"相机标定失败: {e}"
+            }
+    
+    def perform_hand_eye_calibration(self,
+                                   num_poses: int = 15,
+                                   calibration_method: str = 'tsai',
+                                   workspace_center: list = None,
+                                   workspace_radius: float = 0.05,
+                                   camera_source: int = 0,
+                                   show_preview: bool = True) -> dict:
+        """
+        执行手眼标定
+        
+        Args:
+            num_poses: 采集位姿数量
+            calibration_method: 标定方法 ('tsai', 'park', 'horaud', 'andreff', 'daniilidis')
+            workspace_center: 工作空间中心 [x, y, z]
+            workspace_radius: 工作空间半径
+            camera_source: 相机设备ID
+            show_preview: 是否显示预览
+            
+        Returns:
+            标定结果
+        """
+        try:
+            # 检查手眼标定系统是否已初始化
+            if not hasattr(self, 'hand_eye_calibrator') or not hasattr(self, 'calibration_collector'):
+                return {
+                    "status": False,
+                    "info": "手眼标定系统未初始化，请先调用 initialize_hand_eye_calibration"
+                }
+            
+            logger.info(f"开始手眼标定流程，采集{num_poses}个位姿")
+            
+            # 设置默认工作空间中心
+            if workspace_center is None:
+                workspace_center = [0.15, 0.0, 0.20]
+            
+            # 生成标定位姿
+            poses = self.calibration_collector.generate_calibration_poses(
+                num_poses=num_poses,
+                workspace_center=workspace_center,
+                workspace_radius=workspace_radius
+            )
+            
+            # 采集标定数据
+            collection_result = self.calibration_collector.collect_calibration_data(
+                poses=poses,
+                show_preview=show_preview
+            )
+            
+            if not collection_result['success'] or collection_result['successful_samples'] < 3:
+                return {
+                    "status": False,
+                    "info": f"数据采集失败或样本数量不足: {collection_result}",
+                    "collection_result": collection_result
+                }
+            
+            # 添加数据到标定器
+            added_samples = self.calibration_collector.add_data_to_calibrator(self.hand_eye_calibrator)
+            if added_samples < 3:
+                return {
+                    "status": False,
+                    "info": f"有效标定样本数量不足，需要至少3个，实际{added_samples}个"
+                }
+            
+            # 执行手眼标定
+            calibration_success = self.hand_eye_calibrator.solve_hand_eye_calibration(calibration_method)
+            if not calibration_success:
+                return {
+                    "status": False,
+                    "info": "手眼标定算法执行失败"
+                }
+            
+            # 保存标定结果
+            calibration_file = self.calibration_collector.save_directory + "/hand_eye_calibration.json"
+            self.hand_eye_calibrator.save_calibration(calibration_file)
+            
+            return {
+                "status": True,
+                "info": "手眼标定成功完成",
+                "collection_result": collection_result,
+                "added_samples": added_samples,
+                "calibration_error": self.hand_eye_calibrator.calibration_error,
+                "calibration_file": calibration_file,
+                "hand_eye_transform": self.hand_eye_calibrator.hand_eye_transform.A.tolist()
+            }
+            
+        except Exception as e:
+            logger.error(f"手眼标定失败: {e}")
+            return {
+                "status": False,
+                "info": f"手眼标定失败: {e}"
+            }
+    
+    def load_hand_eye_calibration(self, calibration_file: str) -> dict:
+        """
+        加载手眼标定结果
+        
+        Args:
+            calibration_file: 标定文件路径
+            
+        Returns:
+            加载结果
+        """
+        try:
+            if not hasattr(self, 'hand_eye_calibrator'):
+                from armpi_common.hand_eye_calibration import HandEyeCalibration
+                self.hand_eye_calibrator = HandEyeCalibration()
+            
+            success = self.hand_eye_calibrator.load_calibration(calibration_file)
+            if success:
+                return {
+                    "status": True,
+                    "info": "手眼标定结果加载成功",
+                    "calibration_error": self.hand_eye_calibrator.calibration_error,
+                    "hand_eye_transform": self.hand_eye_calibrator.hand_eye_transform.A.tolist()
+                }
+            else:
+                return {
+                    "status": False,
+                    "info": "手眼标定结果加载失败"
+                }
+                
+        except Exception as e:
+            logger.error(f"加载手眼标定失败: {e}")
+            return {
+                "status": False,
+                "info": f"加载失败: {e}"
+            }
+    
+    def get_camera_pose_in_base(self, robot_pose: list = None) -> dict:
+        """
+        获取相机在基座坐标系中的位姿
+        
+        Args:
+            robot_pose: 机器人末端位姿，为None时使用当前位姿
+            
+        Returns:
+            相机位姿结果
+        """
+        try:
+            if not hasattr(self, 'hand_eye_calibrator') or self.hand_eye_calibrator.hand_eye_transform is None:
+                return {
+                    "status": False,
+                    "info": "手眼标定未完成，无法计算相机位姿"
+                }
+            
+            # 获取机器人位姿
+            if robot_pose is None:
+                fk_result = self.get_joint_fkine(current_pose=True)
+                if not fk_result or fk_result['fkine'] is None:
+                    return {
+                        "status": False,
+                        "info": "无法获取当前机器人位姿"
+                    }
+                robot_pose = fk_result['fkine']
+            
+            # 计算相机位姿
+            camera_pose = self.hand_eye_calibrator.get_camera_pose_in_base(robot_pose)
+            if camera_pose is None:
+                return {
+                    "status": False,
+                    "info": "相机位姿计算失败"
+                }
+            
+            # 提取位姿信息
+            camera_position = camera_pose.t.tolist()
+            camera_orientation = camera_pose.rpy(order='zyx').tolist()
+            
+            return {
+                "status": True,
+                "info": "相机位姿计算成功",
+                "camera_pose": camera_position + camera_orientation,
+                "camera_transform_matrix": camera_pose.A.tolist()
+            }
+            
+        except Exception as e:
+            logger.error(f"计算相机位姿失败: {e}")
+            return {
+                "status": False,
+                "info": f"计算失败: {e}"
+            }
+    
+    def validate_hand_eye_calibration(self, 
+                                    test_poses: list = None,
+                                    camera_source: int = 0,
+                                    num_test_poses: int = 5) -> dict:
+        """
+        验证手眼标定精度
+        
+        Args:
+            test_poses: 测试位姿列表，为None时自动生成
+            camera_source: 相机设备ID
+            num_test_poses: 测试位姿数量
+            
+        Returns:
+            验证结果
+        """
+        try:
+            if not hasattr(self, 'hand_eye_calibrator') or self.hand_eye_calibrator.hand_eye_transform is None:
+                return {
+                    "status": False,
+                    "info": "手眼标定未完成，无法进行验证"
+                }
+            
+            # 生成测试位姿
+            if test_poses is None:
+                if hasattr(self, 'calibration_collector'):
+                    test_poses = self.calibration_collector.generate_calibration_poses(
+                        num_poses=num_test_poses,
+                        workspace_center=[0.15, 0.0, 0.20],
+                        workspace_radius=0.03
+                    )
+                else:
+                    return {
+                        "status": False,
+                        "info": "无法生成测试位姿，请提供test_poses参数"
+                    }
+            
+            validation_results = []
+            successful_validations = 0
+            
+            # 初始化相机
+            import cv2
+            cap = cv2.VideoCapture(camera_source)
+            if not cap.isOpened():
+                return {
+                    "status": False,
+                    "info": f"无法打开相机: {camera_source}"
+                }
+            
+            try:
+                for i, pose in enumerate(test_poses):
+                    logger.info(f"验证测试位姿 {i+1}/{len(test_poses)}")
+                    
+                    # 移动到测试位姿
+                    move_result = self.set_joint_move_with_coordinate(pose, move_type=0, move_time=3000)
+                    if not move_result['status']:
+                        logger.warning(f"无法移动到测试位姿 {i+1}")
+                        continue
+                    
+                    time.sleep(3.5)  # 等待移动完成
+                    
+                    # 采集图像
+                    ret, image = cap.read()
+                    if not ret:
+                        logger.warning(f"采集测试图像 {i+1} 失败")
+                        continue
+                    
+                    # 验证标定
+                    validation = self.hand_eye_calibrator.validate_calibration(pose, image)
+                    if validation:
+                        validation_results.append(validation)
+                        successful_validations += 1
+                        logger.info(f"测试位姿 {i+1} 验证成功: "
+                                  f"平移误差={validation.get('translation_error_mm', 0):.2f}mm")
+                    else:
+                        logger.warning(f"测试位姿 {i+1} 验证失败")
+            
+            finally:
+                cap.release()
+            
+            # 计算统计结果
+            if validation_results:
+                translation_errors = [r.get('translation_error_mm', 0) for r in validation_results]
+                rotation_errors = [r.get('rotation_error_deg', 0) for r in validation_results]
+                
+                summary = {
+                    "status": True,
+                    "info": "手眼标定验证完成",
+                    "successful_tests": successful_validations,
+                    "total_tests": len(test_poses),
+                    "success_rate": successful_validations / len(test_poses),
+                    "mean_translation_error_mm": np.mean(translation_errors),
+                    "std_translation_error_mm": np.std(translation_errors),
+                    "mean_rotation_error_deg": np.mean(rotation_errors),
+                    "std_rotation_error_deg": np.std(rotation_errors),
+                    "detailed_results": validation_results
+                }
+            else:
+                summary = {
+                    "status": False,
+                    "info": "没有成功的验证结果",
+                    "successful_tests": 0,
+                    "total_tests": len(test_poses)
+                }
+            
+            logger.info(f"手眼标定验证完成: 成功率={summary.get('success_rate', 0):.1%}")
+            return summary
+            
+        except Exception as e:
+            logger.error(f"手眼标定验证失败: {e}")
+            return {
+                "status": False,
+                "info": f"验证失败: {e}"
+            }
+    
+    def get_hand_eye_calibration_info(self) -> dict:
+        """
+        获取手眼标定信息摘要
+        
+        Returns:
+            标定信息
+        """
+        if not hasattr(self, 'hand_eye_calibrator'):
+            return {
+                "status": False,
+                "info": "手眼标定系统未初始化"
+            }
+        
+        try:
+            calibration_info = self.hand_eye_calibrator.get_calibration_info()
+            calibration_info['status'] = True
+            return calibration_info
+            
+        except Exception as e:
+            logger.error(f"获取手眼标定信息失败: {e}")
+            return {
+                "status": False,
+                "info": f"获取信息失败: {e}"
+            }
+    
     
     def close_connection(self):
         logger.info("机械臂断开连接")
