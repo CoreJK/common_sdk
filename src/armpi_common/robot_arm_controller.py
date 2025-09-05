@@ -15,6 +15,7 @@ from armpi_common._log import logger, set_file_level, set_stream_level, disable_
 from armpi_common.armipi_module import RobotArmModule
 from armpi_common.armipi_module import angle2pulse, pulse2angle
 from armpi_common.utils import is_flat
+from armpi_common.kinematics import ArmKinematics
 
 import numpy as np
 from spatialmath import SE3
@@ -41,6 +42,9 @@ class RobotArmController:
         self.serial_client.dtr = False
         self.__enable_recv = False  # 是否开启接收数据包功能
         self.robot_arm_module = RobotArmModule()
+        
+        # 初始化运动学计算模块
+        self.kinematics = ArmKinematics(self.robot_arm_module)
         
         # 数据接收相关        
         self.state = PacketControllerState.PACKET_CONTROLLER_STATE_STARTBYTE1
@@ -468,74 +472,66 @@ class RobotArmController:
         :param int steps: 轨迹离散步数
         :param list[int] mask: 逆解掩码，长度6，默认仅约束 [x,y,z,yaw] -> [1,1,1,0,0,1]
         :param bool blocking: 是否阻塞等待执行（按步 sleep）
+        
+        Returns:
+            Dict containing:
+                - status (bool): 执行是否成功
+                - steps (int): 实际完成的步数
+                - info (str): 状态信息
         """
         logger.info("在两个末端位姿之间执行平滑过渡")
-        # 校验输入
-        for name, coord in (("start", start_coordinate_list), ("end", end_coordinate_list)):
-            if not is_flat(coord):
-                logger.error(f"{name} 坐标列表不能嵌套, 只能是一维列表")
-                return {"status": False, "info": f"{name} 坐标列表不能嵌套, 只能是一维列表"}
-            if len(coord) != 6:
-                logger.error(f"{name} 坐标列表长度为 {len(coord)}，预期为 6")
-                return {"status": False, "info": f"{name} 坐标列表长度为 {len(coord)}，预期为 6"}
-            if not all(isinstance(x, (int, float)) for x in coord):
-                logger.error(f"{name} 坐标列表中的元素必须是整数或浮点数")
-                return {"status": False, "info": f"{name} 坐标列表中的元素必须是整数或浮点数"}
-
-        if mask is None:
-            mask = [1, 1, 1, 1, 1, 0]
-        if len(mask) != 6:
-            return {"status": False, "info": "mask 长度需为 6"}
-        if steps <= 0:
-            return {"status": False, "info": "steps 必须 > 0"}
-        if duration_ms < 0:
-            return {"status": False, "info": "duration_ms 不能为负"}
-
+        
+        # 委托给ArmKinematics模块进行轨迹规划
+        trajectory_result = self.kinematics.plan_trajectory(
+            start_coordinate_list=start_coordinate_list,
+            end_coordinate_list=end_coordinate_list,
+            duration_ms=duration_ms,
+            steps=steps,
+            mask=mask
+        )
+        
+        if not trajectory_result["status"]:
+            logger.error(f"轨迹规划失败: {trajectory_result['info']}")
+            return {
+                "status": False,
+                "steps": 0,
+                "info": f"轨迹规划失败: {trajectory_result['info']}"
+            }
+        
+        # 获取规划好的轨迹
+        trajectory = trajectory_result["trajectory"]
+        planned_steps = trajectory_result["steps"]
+        
         # 时间分配
-        step_time_ms = max(1, int(round(duration_ms / steps)))
-
-        # 拆包起止位姿
-        sx, sy, sz, sR, sP, sY = start_coordinate_list
-        ex, ey, ez, eR, eP, eY = end_coordinate_list
-
-        # 先用起点作为初值求出初始关节解，提升后续迭代稳定性
-        T_start = SE3([sx, sy, sz]) * rpy2tr([sR, sP, sY], order="zyx")
-        sol0 = self.robot_arm_module.ikine_LM(T_start, joint_limits=True)
-        if not sol0.success:
-            logger.error("起点逆解失败，无法开始轨迹")
-            return {"status": False, "info": "起点逆解失败"}
-        qk = sol0.q
-
-        steps_done = 0
-        for k in range(1, steps + 1):
-            t = k / float(steps)
-            # 线性插值位置与姿态
-            x = sx + (ex - sx) * t
-            y = sy + (ey - sy) * t
-            z = sz + (ez - sz) * t
-            Rr = sR + (eR - sR) * t
-            Rp = sP + (eP - sP) * t
-            Ry = sY + (eY - sY) * t
-
-            T_goal = SE3([x, y, z]) * rpy2tr([Rr, Rp, Ry], order="zyx")
-            sol = self.robot_arm_module.ikine_LM(T_goal, q0=qk, mask=mask, joint_limits=True)
-            if not sol.success:
-                logger.error(f"第 {k}/{steps} 步逆解失败，提前结束")
+        step_time_ms = max(1, int(round(duration_ms / planned_steps)))
+        
+        # 执行轨迹 - 硬件控制逻辑保留在控制器中
+        steps_executed = 0
+        for step_idx, joint_pulses in enumerate(trajectory):
+            try:
+                # 下发本步目标到硬件
+                for joint_id, pulse in enumerate(joint_pulses, start=1):
+                    self.set_joint_angle_use_time(joint_id, pulse, step_time_ms)
+                
+                steps_executed += 1
+                
+                # 阻塞等待（如果需要）
+                if blocking:
+                    time.sleep(step_time_ms / 1000.0)
+                    
+            except Exception as e:
+                logger.error(f"执行第 {step_idx+1}/{planned_steps} 步时发生错误: {e}")
                 break
-            qk = sol.q
-
-            # 角度(弧度) -> 脉冲，并下发本步目标
-            joint_pulse = angle2pulse([qk.tolist()], convert_int=True)[0]
-            for joint_id, pulse in enumerate(joint_pulse, start=1):
-                self.set_joint_angle_use_time(joint_id, pulse, step_time_ms)
-
-            steps_done += 1
-            if blocking:
-                time.sleep(step_time_ms / 1000.0)
-
-        ok = steps_done == steps
-        info = "轨迹完成" if ok else f"仅完成 {steps_done}/{steps} 步"
-        return {"status": ok, "steps": steps_done, "info": info}
+        
+        # 返回执行结果
+        success = steps_executed == planned_steps
+        info = "轨迹完成" if success else f"仅完成 {steps_executed}/{planned_steps} 步"
+        
+        return {
+            "status": success,
+            "steps": steps_executed,
+            "info": info
+        }
         
     def set_joint_emergency_stop(self, joint_id):
         """指定关节紧急停止运动"""
@@ -893,85 +889,129 @@ class RobotArmController:
         }
     
     def get_joint_fkine(self, joint_position_list=None, current_pose=False):
-        """获取机械臂的正解"""
-        logger.info(f"获取机械臂的正解")
+        """获取机械臂的正解
+        
+        Args:
+            joint_position_list: 关节位置列表（脉冲值），如果为None则使用current_pose参数
+            current_pose: 是否使用当前机械臂位置
+            
+        Returns:
+            Dict containing:
+                - status (bool): 计算是否成功
+                - fkine (List[float] or None): 末端位姿 [x, y, z, rx, ry, rz]
+                - info (str): 状态信息
+        """
+        logger.info("获取机械臂的正解")
+        
         if current_pose:
-            position_list = self.get_all_joint_position(pulse_to_angle=True).get("position_list")
+            # 使用当前位置
+            position_result = self.get_all_joint_position(pulse_to_angle=True)
+            if position_result.get("position_list") is None:
+                logger.error("获取当前关节位置失败")
+                return {
+                    "status": False,
+                    "fkine": None,
+                    "info": "获取当前关节位置失败"
+                }
+            position_list = position_result["position_list"]
         else:
-            position_list = joint_position_list
-            if not is_flat(position_list):
-                logger.error(f"关节脉冲列表不能嵌套, 只能是一维列表")
+            # 使用提供的关节位置列表
+            if joint_position_list is None:
+                logger.error("必须提供关节位置列表或设置current_pose=True")
+                return {
+                    "status": False,
+                    "fkine": None,
+                    "info": "必须提供关节位置列表或设置current_pose=True"
+                }
+            
+            # 验证输入格式（保持与原始实现的兼容性）
+            if not is_flat(joint_position_list):
+                logger.error("关节脉冲列表不能嵌套, 只能是一维列表")
                 return {
                     "status": False,
                     "fkine": None,
                     "info": "关节脉冲列表不能嵌套, 只能是一维列表"
                 }
             
-            if len(position_list) != 5:
-                logger.error(f"关节脉冲列表长度为 {len(position_list)}，预期为 5")
+            if len(joint_position_list) != 5:
+                logger.error(f"关节脉冲列表长度为 {len(joint_position_list)}，预期为 5")
                 return {
                     "status": False,
                     "fkine": None,
-                    "info": "关节脉冲列表长度为 {len(position_list)}，预期为 5"
+                    "info": f"关节脉冲列表长度为 {len(joint_position_list)}，预期为 5"
                 }
             
-            if not all(isinstance(x, int) for x in position_list):
-                logger.error(f"关节脉冲列表中的元素必须是整数")
+            if not all(isinstance(x, int) for x in joint_position_list):
+                logger.error("关节脉冲列表中的元素必须是整数")
                 return {
                     "status": False,
                     "fkine": None,
                     "info": "关节脉冲列表中的元素必须是整数"
                 }
-                
-            position_list = pulse2angle(position_list)
+            
+            # 转换脉冲值为角度值
+            position_list = pulse2angle(joint_position_list)
         
-        if position_list is None:
-            logger.error(f"获取所有关节的位置失败")
+        # 委托给ArmKinematics模块进行计算
+        result = self.kinematics.forward_kinematics(position_list)
+        
+        # 保持原有的返回格式和信息
+        if result["status"]:
+            return {
+                "status": True,
+                "fkine": result["fkine"],
+                "info": "获取机械臂的正解成功"
+            }
+        else:
             return {
                 "status": False,
                 "fkine": None,
-                "info": "获取所有关节的位置失败"
+                "info": "获取机械臂的正解失败"
             }
-        
-        translation_vector = self.robot_arm_module.fkine(position_list)
-        x, y, z = translation_vector.t  # 平移向量
-        Rx, Py, Yz = translation_vector.rpy(order="zyx") # 旋转角
-        
-        return {
-            "status": True,
-            "fkine": [x, y, z, Rx, Py, Yz],
-            "info": "获取机械臂的正解成功"
-        }
     
     def get_joint_ikine(self, end_tool_coordinate_list=None, current_pose=False):
-        """获取机械臂的逆解"""
-        logger.info(f"获取机械臂的逆解")
+        """获取机械臂的逆解
+        
+        Args:
+            end_tool_coordinate_list: 末端位姿列表 [x,y,z,rx,ry,rz]，如果为None则使用current_pose参数
+            current_pose: 是否使用当前机械臂位姿作为目标
+            
+        Returns:
+            Dict containing:
+                - status (bool): 计算是否成功
+                - ikine (List[int] or None): 关节脉冲值列表
+                - info (str): 状态信息
+        """
+        logger.info("获取机械臂的逆解")
+        
         if current_pose:
-            fkine = self.get_joint_fkine(current_pose=True).get("fkine")
-            if fkine is None:
-                logger.error(f"获取机械臂的正解失败")
+            # 使用当前位姿
+            fkine_result = self.get_joint_fkine(current_pose=True)
+            if not fkine_result.get("status") or fkine_result.get("fkine") is None:
+                logger.error("获取机械臂当前位姿失败")
                 return {
                     "status": False,
                     "ikine": None,
-                    "info": "获取机械臂的正解失败"
+                    "info": "获取机械臂当前位姿失败"
                 }
-            else:
-                x, y, z, Rx, Py, Yz = fkine
+            coordinate_list = fkine_result["fkine"]
         else:
+            # 使用提供的末端坐标列表
+            if end_tool_coordinate_list is None:
+                logger.error("必须提供末端坐标列表或设置current_pose=True")
+                return {
+                    "status": False,
+                    "ikine": None,
+                    "info": "必须提供末端坐标列表或设置current_pose=True"
+                }
+            
+            # 验证输入格式（保持与原始实现的兼容性）
             if not is_flat(end_tool_coordinate_list):
-                logger.error(f"末端坐标列表不能嵌套, 只能是一维列表")
+                logger.error("末端坐标列表不能嵌套, 只能是一维列表")
                 return {
                     "status": False,
                     "ikine": None,
                     "info": "末端坐标列表不能嵌套, 只能是一维列表"
-                }
-            
-            if not all(isinstance(x, (int, float)) for x in end_tool_coordinate_list):
-                logger.error(f"末端坐标列表中的元素必须是整数或浮点数")
-                return {
-                    "status": False,
-                    "ikine": None,
-                    "info": "末端坐标列表中的元素必须是整数或浮点数"
                 }
             
             if len(end_tool_coordinate_list) != 6:
@@ -979,23 +1019,30 @@ class RobotArmController:
                 return {
                     "status": False,
                     "ikine": None,
-                    "info": "末端坐标列表长度为 {len(end_tool_coordinate_list)}，预期为 6"
+                    "info": f"末端坐标列表长度为 {len(end_tool_coordinate_list)}，预期为 6"
                 }
             
-            x, y, z, Rx, Py, Yz = end_tool_coordinate_list
+            if not all(isinstance(x, (int, float)) for x in end_tool_coordinate_list):
+                logger.error("末端坐标列表中的元素必须是数值类型")
+                return {
+                    "status": False,
+                    "ikine": None,
+                    "info": "末端坐标列表中的元素必须是数值类型"
+                }
+            
+            coordinate_list = end_tool_coordinate_list
         
-        R_T = SE3([x, y, z]) * rpy2tr([Rx, Py, Yz], order="zyx")
-        sol = self.robot_arm_module.ikine_LM(R_T, joint_limits=True)
-        if sol.success:
-            inverse_result = np.round(sol.q, 6).tolist()
-            joint_pluse = angle2pulse([inverse_result], convert_int=True)
+        # 委托给ArmKinematics模块进行计算
+        result = self.kinematics.inverse_kinematics(coordinate_list)
+        
+        # 保持原有的返回格式和信息
+        if result["status"]:
             return {
                 "status": True,
-                "ikine": joint_pluse[0], # 兼容关节转脉冲函数, 未来可能支持多组动作返回的情况
+                "ikine": result["ikine"],
                 "info": "获取机械臂的逆解成功"
             }
         else:
-            logger.error(f"获取机械臂的逆解失败")
             return {
                 "status": False,
                 "ikine": None,
@@ -2390,10 +2437,10 @@ if __name__ == '__main__':
     # time.sleep(2)
     # logger.info(controller.get_joint_fkine(current_pose=True))
     
-    # pose_b = [0.11855860931202489, -0.00347731659031457, 0.21505940094612014, 1.2262157409165864, -0.7071826799390757, 1.7705563538323623]
-    # home_pose = [0.0016584400011821232, -5.559566964662987e-05, 0.2597902355986266, 0.00010528009023049985, -0.01256592961556895, 3.0997040900621227]
+    pose_b = [0.11855860931202489, -0.00347731659031457, 0.21505940094612014, 1.2262157409165864, -0.7071826799390757, 1.7705563538323623]
+    home_pose = [0.009030721138624147, -0.0003784993595718179, 0.25958276486578696, 0.0014056788188084033, -0.0670059225018822, 3.07871368847899]
     
-    # logger.info(controller.set_joint_move_with_coordinate(home_pose, move_type=0, move_time=5000))
+    logger.info(controller.set_joint_move_with_coordinate(home_pose, move_type=0, move_time=3000))
     # logger.info(controller.set_joint_move_with_coordinate(pose_b, move_type=0, move_time=1000))
     
     # controller.move_between_coordinates(current_pose, home_pose, duration_ms=2000, steps=10, mask=[1, 1, 1, 1, 1, 0], blocking=True)
