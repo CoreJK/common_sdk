@@ -13,13 +13,11 @@ from armpi_common.utils import calculate_checksum, split_to_bytes
 from armpi_common.cmdTable import CMD_TABLE
 from armpi_common._log import logger, set_file_level, set_stream_level, disable_logging
 from armpi_common.armipi_module import RobotArmModule
-from armpi_common.armipi_module import angle2pulse, pulse2angle
+from armpi_common.armipi_module import pulse2angle
 from armpi_common.utils import is_flat
 from armpi_common.kinematics import ArmKinematics
 
 import numpy as np
-from spatialmath import SE3
-from spatialmath.base import rpy2tr
 from typing import List
 
 set_stream_level("DEBUG")
