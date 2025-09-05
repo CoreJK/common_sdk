@@ -6,6 +6,48 @@
 
 `armpi_common` 是一个用于控制幻尔六轴串联机械臂的 Python SDK。该 SDK 提供了完整的舵机通信协议实现，支持舵机的各种控制功能，包括位置控制、电机控制、参数配置等。
 
+## 项目结构
+
+```
+common_sdk/
+├── src/armpi_common/                    # 核心源代码包
+│   ├── __init__.py                      # 包初始化文件
+│   ├── robot_arm_controller.py          # 机械臂主控制器（核心类）
+│   ├── armipi_module.py                 # 机械臂模型和角度转换
+│   ├── cmdTable.py                      # 通信协议指令表
+│   ├── utils.py                         # 工具函数集合
+│   ├── _log.py                          # 日志配置模块
+│   └── model/                           # 机械臂3D模型文件
+│       ├── armpi_fpv.urdf               # URDF机械臂模型
+│       └── meshes/                      # 3D网格文件
+│           ├── base_link.STL            # 底座模型
+│           ├── link1.STL ~ link5.STL    # 关节1-5模型
+│           ├── camera_link.STL          # 相机模型
+│           ├── gripper_base.STL         # 夹爪底座
+│           └── l_*.STL, r_*.STL         # 夹爪左右部分
+├── examples/                            # 示例代码
+├── tests/                               # 测试代码
+│   ├── test_case/                       # 测试用例
+│   │   ├── test_robot_controller.py     # 控制器测试
+│   │   └── robot_config.ini             # 测试配置
+│   └── __init__.py                      # 测试包初始化
+├── dist/                                # 构建产物
+│   ├── armpi_common-0.1.0-py3-none-any.whl  # Python wheel包
+│   └── armpi_common-0.1.0.tar.gz            # 源码包
+├── pyproject.toml                       # 项目配置文件
+├── requirements.txt                     # Python依赖列表
+├── pdm.lock                            # PDM锁定文件
+└── README.md                           # 项目说明文档
+```
+
+### 核心模块说明
+
+- **`robot_arm_controller.py`**: 主要的机械臂控制器类，提供完整的API接口
+- **`armipi_module.py`**: 机械臂模型定义，包含角度和脉冲转换功能
+- **`cmdTable.py`**: 完整的舵机通信协议指令表
+- **`utils.py`**: 通用工具函数，包括校验和计算、字节操作等
+- **`_log.py`**: 统一的日志配置和管理
+
 ## 机械臂参数
 
 ### MDH 参数
@@ -70,22 +112,6 @@ tool_link = 0.1126
   - 位置、温度、电压监控
   - 配置参数读取
 
-- 🔥 **视觉系统** (**新增**)
-  - 眼在手上（Eye-in-Hand）标定
-  - 眼在手外（Eye-to-Hand）标定
-  - 相机内参标定
-  - 手眼变换矩阵计算
-  - 多种标定算法支持（Tsai、Park、Horaud等）
-  - 自动化数据采集
-  - 标定精度验证
-  - **标定安全保护**：自动电机使能管理
-
-- 🤖 **运动学系统**
-  - 正向运动学 (Forward Kinematics)
-  - 逆向运动学 (Inverse Kinematics)
-  - 轨迹规划和插值
-  - 工作空间分析
-
 - 🛠️ **工具函数**
   - 校验和计算
   - 字节操作工具
@@ -98,7 +124,6 @@ tool_link = 0.1126
 
 - Python >= 3.8
 - 支持串口通信的硬件设备
-- 用于视觉功能的 USB 相机（可选）
 
 ### 安装依赖
 
@@ -109,9 +134,6 @@ pdm install
 # 创建虚拟环境后，再使用 pip 去创建虚拟环境，涉及到较多依赖
 # 或者使用 pip
 pip install -r requirements.txt
-
-# 视觉功能额外依赖（可选）
-pip install opencv-python scipy
 ```
 
 ## 快速开始
@@ -186,175 +208,7 @@ mode_speed = controller.get_joint_mode_and_speed(1)
 print(f"关节1模式和速度: {mode_speed}")
 ```
 
-### 运动学控制
 
-```python
-# 正向运动学：根据关节角度计算末端位姿
-fk_result = controller.get_joint_fkine(current_pose=True)
-if fk_result['fkine']:
-    x, y, z, rx, ry, rz = fk_result['fkine']
-    print(f"末端位置: [{x:.3f}, {y:.3f}, {z:.3f}]")
-    print(f"末端姿态: [{rx:.3f}, {ry:.3f}, {rz:.3f}]")
-
-# 逆向运动学：根据目标位姿计算关节角度
-target_pose = [0.15, 0.0, 0.20, 0.0, 0.0, -3.14159]
-ik_result = controller.get_joint_ikine(target_pose)
-if ik_result['ikine']:
-    joint_pulses = ik_result['ikine']
-    print(f"关节脉冲值: {joint_pulses}")
-
-# 坐标控制：直接移动到目标位姿
-move_result = controller.set_joint_move_with_coordinate(
-    target_pose, move_type=0, move_time=3000
-)
-if move_result['status']:
-    print("运动指令发送成功")
-
-# 轨迹规划：在两个位姿之间平滑移动
-start_pose = [0.10, 0.0, 0.15, 0.0, 0.0, -3.14159]
-end_pose = [0.20, 0.0, 0.25, 0.0, 0.0, -3.14159]
-trajectory_result = controller.move_between_coordinates(
-    start_pose, end_pose, duration_ms=5000, steps=50
-)
-```
-
-### 眼在手上标定
-
-```python
-# 1. 相机标定：获取相机内参
-camera_result = controller.perform_camera_calibration(
-    camera_source=0,           # 相机设备ID
-    num_images=20,            # 采集图像数量
-    board_size=(9, 6),        # 标定板尺寸
-    square_size=0.025         # 方格大小(米)
-)
-
-if camera_result['status']:
-    print("相机标定成功")
-    
-    # 2. 手眼标定：获取相机与机械臂的变换关系
-    # 使用相机标定结果
-    import numpy as np
-    camera_matrix = np.array(camera_result['camera_matrix'])
-    distortion_coeffs = np.array(camera_result['distortion_coeffs'])
-    
-    # 初始化手眼标定系统
-    init_result = controller.initialize_hand_eye_calibration(
-        camera_matrix=camera_matrix,
-        distortion_coeffs=distortion_coeffs
-    )
-    
-    if init_result['status']:
-        # 执行手眼标定
-        hand_eye_result = controller.perform_hand_eye_calibration(
-            num_poses=15,              # 采集位姿数量
-            calibration_method='tsai'   # 标定算法
-        )
-        
-        if hand_eye_result['status']:
-            print("手眼标定成功")
-            print(f"标定误差: {hand_eye_result['calibration_error']:.6f}")
-            
-            # 3. 使用标定结果
-            # 获取相机在基座坐标系中的位姿
-            camera_pose = controller.get_camera_pose_in_base()
-            if camera_pose['status']:
-                pose = camera_pose['camera_pose']
-                print(f"相机位姿: {pose}")
-```
-
-### 眼在手外标定
-
-```python
-# 眼在手外配置：相机固定在外部，标定板在机械臂末端
-
-# 1. 相机标定（同上）
-camera_result = controller.perform_camera_calibration(
-    camera_source=2,           # 外部固定相机
-    num_images=20,
-    board_size=(9, 6),
-    square_size=0.025
-)
-
-if camera_result['status']:
-    print("相机标定成功")
-    
-    # 2. 眼在手外标定：获取固定相机与机械臂基座的变换关系
-    camera_matrix = np.array(camera_result['camera_matrix'])
-    distortion_coeffs = np.array(camera_result['distortion_coeffs'])
-    
-    # 初始化眼在手外标定系统
-    init_result = controller.initialize_eye_to_hand_calibration(
-        camera_matrix=camera_matrix,
-        distortion_coeffs=distortion_coeffs,
-        camera_pose=[0.0, -0.3, 0.4, 0.0, 0.0, 0.0]  # 相机位置（可选）
-    )
-    
-    if init_result['status']:
-        # 执行眼在手外标定
-        eye_to_hand_result = controller.perform_eye_to_hand_calibration(
-            num_poses=15,              # 采集位姿数量
-            calibration_method='tsai'   # 标定算法
-        )
-        
-        if eye_to_hand_result['status']:
-            print("眼在手外标定成功")
-            print(f"标定误差: {eye_to_hand_result['calibration_error']:.6f}")
-            
-            # 3. 使用标定结果
-            # 获取固定相机的位姿
-            camera_pose = controller.get_fixed_camera_pose()
-            if camera_pose['status']:
-                pose = camera_pose['camera_pose']
-                print(f"固定相机位姿: {pose}")
-            
-            # 获取标定板的当前位姿
-            board_pose = controller.get_board_pose_from_robot_pose()
-            if board_pose['status']:
-                pose = board_pose['board_pose']
-                print(f"标定板位姿: {pose}")
-```
-
-### 电机使能管理（标定安全保护）
-
-```python
-# 标定前安全措施：检查和卸载电机使能
-safety_status = controller.check_motors_safety_status()
-print(f"当前安全模式: {safety_status['is_safe_mode']}")
-
-# 卸载所有电机使能（标定前必须）
-# 0 = 卸载掉电（无力矩输出），1 = 装载电机（有力矩输出）
-unload_result = controller.unload_all_motors(include_gripper=False)
-if unload_result['status']:
-    print("✅ 电机已安全卸载掉电，可以进行标定")
-
-# 执行标定操作...
-# （标定过程中电机不会意外启动，确保安全）
-
-# 标定完成后恢复电机使能
-reload_result = controller.reload_all_motors(restore_previous=True)
-if reload_result['status']:
-    print("✅ 电机已装载恢复到标定前状态")
-```
-
-### 完整示例
-
-运行完整的标定示例：
-
-```bash
-# 眼在手上标定（相机在机械臂末端）
-python examples/eye_in_hand_calibration_example.py --mode full
-
-# 眼在手外标定（相机固定在外部）
-python examples/eye_to_hand_calibration_example.py --mode full
-
-# 电机使能管理演示
-python examples/motor_enable_management_example.py
-
-# 快速演示（需要已有标定文件）
-python examples/eye_in_hand_calibration_example.py --mode quick
-python examples/eye_to_hand_calibration_example.py --mode quick
-```
 
 ## API 文档
 
@@ -455,23 +309,11 @@ Checksum = ~(ID + Length + cmd + Parm 1 + parm N)
 
 - ✅ 写指令接口：100% 完成 (14/14)
 - ✅ 读指令接口：100% 完成 (14/14)
-- ✅ 运动学系统：完成
-  - 正向运动学
-  - 逆向运动学
-  - 轨迹规划
-- ✅ 视觉系统：完成
-  - 相机标定
-  - 眼在手上标定 (5种算法)
-  - 眼在手外标定 (5种算法)
-  - 自动化数据采集
-  - 精度验证
 - ✅ 工具函数：完成
 - ✅ 协议解析：完成
 
 ## 文档
 
-- 📖 [眼在手上标定指南](docs/hand_eye_calibration_guide.md)
-- 📖 [眼在手外标定指南](docs/eye_to_hand_calibration_guide.md)
 - 🔧 [API 参考文档](README.md#api-文档)
 - 💡 [示例代码](examples/)
 
