@@ -3,10 +3,11 @@ import numpy as np
 
 #         舵机脉宽范围，中位值，对应的角度范围，中位值
 joint1_map = [0, 1000, 500, -120, 120, 0]
-joint2_map = [0, 1000, 500, 30, -210, -90]
-joint3_map = [0, 1000, 500, -120, 120, 0]
-joint4_map = [0, 1000, 500, 30, -210, -90]
+joint2_map = [0, 1000, 500, -210, 30, 0]
+joint3_map = [0, 1000, 500, 120, -120, 0]
+joint4_map = [0, 1000, 500, -210, 30, 0]
 joint5_map = [0, 1000, 500, -120, 120, 0]
+joint6_map = [0, 1000, 500, -120, 120, 0]
 
 # 等比例映射
 def angle_transform(angle, param, inverse=False):
@@ -25,8 +26,9 @@ def pulse2angle(pulse_list: list):
     theta3 = angle_transform(pulse_list[2], joint3_map)
     theta4 = angle_transform(pulse_list[3], joint4_map)
     theta5 = angle_transform(pulse_list[4], joint5_map)
+    theta6 = angle_transform(pulse_list[5], joint6_map)
     
-    return radians(theta1), radians(theta2), radians(theta3), radians(theta4), radians(theta5)
+    return radians(theta1), radians(theta2), radians(theta3), radians(theta4), radians(theta5), radians(theta6)
 
 def angle2pulse(angle_list: list, convert_int=False):
     """将多组角度转换为脉冲宽度

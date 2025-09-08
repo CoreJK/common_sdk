@@ -737,8 +737,7 @@ class RobotArmController:
         """
         logger.info(f"获取所有关节的位置")
         position_list = []
-        # 不会获取夹爪的关节位置, 因为不参与正逆解的计算
-        for i in range(1, 6):
+        for i in range(1, 7):
             joint_data = self.get_joint_position(i)
             logger.debug(f"获取关节 {i} 的位置，位置为 {joint_data['position']}")
             if joint_data['position'] is not None:
