@@ -9,6 +9,15 @@ joint4_map = [0, 1000, 500, -210, 30, 0]
 joint5_map = [0, 1000, 500, -120, 120, 0]
 joint6_map = [0, 1000, 500, -120, 120, 0]
 
+joint_map = {
+    'joint1': joint1_map,
+    'joint2': joint2_map,
+    'joint3': joint3_map,
+    'joint4': joint4_map,
+    'joint5': joint5_map,
+    'joint6': joint6_map
+}
+
 # 等比例映射
 def angle_transform(angle, param, inverse=False):
     """用于映射脉冲宽度和角度值"""
@@ -54,7 +63,19 @@ def angle2pulse(angle_list: list, convert_int=False):
 
     return pluse
     
-    
+def single_angle2pulse(angle, joint_name, convert_int=False):
+    """将单个角度转换为脉冲宽度"""
+    pulse = angle_transform(degrees(angle), joint_map[joint_name], True)
+    if convert_int:
+        return int(pulse)
+    else:
+        return pulse
+
+def single_pulse2angle(pulse, joint_name):
+    """将单个脉冲宽度转换为角度"""
+    angle = angle_transform(pulse, joint_map[joint_name], False)
+    return radians(angle)
+
 if __name__ == "__main__":
     # 机械臂关节的角度
     new_angle = [0, 0, 0, 0, 0]
